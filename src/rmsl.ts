@@ -498,7 +498,7 @@ export function float(v: number | Node<"int">): Node<"float"> {
   }
   return node({ _t: "float", type: "float", value: v }) as Node<"float">;
 }
-export function vec2(x: number | Node<"float"> | Node<"vec2"> | Node<"vec3"> | Node<"vec4">, y?: number): Node<"vec2"> {
+export function vec2(x: FloatLike | Node<"vec2"> | Node<"vec3"> | Node<"vec4">, y?: FloatLike): Node<"vec2"> {
   if (isNode(x)) {
     let params = [x as BaseNode<ShaderType>];
     if (y !== undefined) params.push(wrapValue(y) as BaseNode<ShaderType>);
@@ -507,9 +507,12 @@ export function vec2(x: number | Node<"float"> | Node<"vec2"> | Node<"vec3"> | N
   if (y === undefined) {
     return node({ _t: "vec2", type: "construct", params: [wrapValue(x)] }) as Node<"vec2">;
   }
-  return node({ _t: "vec2", type: "vec2", value: [x, y] }) as Node<"vec2">;
+  if (typeof y === "number") {
+    return node({ _t: "vec2", type: "vec2", value: [x, y] }) as Node<"vec2">;
+  }
+  return node({ _t: "vec2", type: "construct", params: [wrapValue(x), y as BaseNode<ShaderType>] }) as Node<"vec2">;
 }
-export function vec3(x: number | Node<"float"> | Node<"vec3"> | Node<"vec4">, y?: number, z?: number): Node<"vec3"> {
+export function vec3(x: FloatLike | Node<"vec3"> | Node<"vec4">, y?: FloatLike, z?: FloatLike): Node<"vec3"> {
   if (isNode(x)) {
     let params = [x as BaseNode<ShaderType>];
     if (y !== undefined) params.push(wrapValue(y) as BaseNode<ShaderType>);
@@ -519,9 +522,17 @@ export function vec3(x: number | Node<"float"> | Node<"vec3"> | Node<"vec4">, y?
   if (y === undefined) {
     return node({ _t: "vec3", type: "construct", params: [wrapValue(x)] }) as Node<"vec3">;
   }
-  return node({ _t: "vec3", type: "vec3", value: [x, y, z] }) as Node<"vec3">;
+  if (typeof y === "number" && (z === undefined || typeof z === "number")) {
+    let values: number[] = [x, y];
+    if (z !== undefined) values.push(z);
+    return node({ _t: "vec3", type: "vec3", value: values }) as Node<"vec3">;
+  }
+  let params = [wrapValue(x) as BaseNode<ShaderType>];
+  if (y !== undefined) params.push(wrapValue(y) as BaseNode<ShaderType>);
+  if (z !== undefined) params.push(wrapValue(z) as BaseNode<ShaderType>);
+  return node({ _t: "vec3", type: "construct", params }) as Node<"vec3">;
 }
-export function vec4(x: number | Node<"float"> | Node<"vec2"> | Node<"vec3"> | Node<"vec4">, y?: number, z?: number, w?: number): Node<"vec4"> {
+export function vec4(x: FloatLike | Node<"vec2"> | Node<"vec3"> | Node<"vec4">, y?: FloatLike, z?: FloatLike, w?: FloatLike): Node<"vec4"> {
   if (isNode(x)) {
     let params = [x as BaseNode<ShaderType>];
     if (y !== undefined) params.push(wrapValue(y) as BaseNode<ShaderType>);
@@ -532,7 +543,17 @@ export function vec4(x: number | Node<"float"> | Node<"vec2"> | Node<"vec3"> | N
   if (y === undefined) {
     return node({ _t: "vec4", type: "construct", params: [wrapValue(x)] }) as Node<"vec4">;
   }
-  return node({ _t: "vec4", type: "vec4", value: [x, y, z!, w!] }) as Node<"vec4">;
+  if (typeof y === "number" && (z === undefined || typeof z === "number") && (w === undefined || typeof w === "number")) {
+    let values: number[] = [x, y];
+    if (z !== undefined) values.push(z);
+    if (w !== undefined) values.push(w);
+    return node({ _t: "vec4", type: "vec4", value: values }) as Node<"vec4">;
+  }
+  let params = [wrapValue(x) as BaseNode<ShaderType>];
+  if (y !== undefined) params.push(wrapValue(y) as BaseNode<ShaderType>);
+  if (z !== undefined) params.push(wrapValue(z) as BaseNode<ShaderType>);
+  if (w !== undefined) params.push(wrapValue(w) as BaseNode<ShaderType>);
+  return node({ _t: "vec4", type: "construct", params }) as Node<"vec4">;
 }
 export function int(v: number | Node<"float">): Node<"int"> {
   if (isNode(v)) {
