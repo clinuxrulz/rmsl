@@ -762,6 +762,56 @@ function glslType(brand: any): string {
   return typeToGLSL[brand as string] ?? "float";
 }
 
+// === Constant folding ===
+function isLeafLiteral(n: BaseNode<ShaderType>): boolean {
+  return (n.type === "float" || n.type === "int" || n.type === "uint" || n.type === "bool") && !n.params;
+}
+
+function tryFold(n: BaseNode<ShaderType>): BaseNode<ShaderType> | null {
+  let params = n.params ?? [];
+  if (!params.every(isLeafLiteral)) return null;
+  let p0 = params[0]?.value;
+  let p1 = params[1]?.value;
+  let t = n._t;
+  if (t === "float" || t === "int" || t === "uint") {
+    let a = p0 as number;
+    let b = p1 as number;
+    switch (n.type) {
+      case "add": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (a + b) | 0 : a + b });
+      case "sub": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (a - b) | 0 : a - b });
+      case "mult": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (a * b) | 0 : a * b });
+      case "div": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (a / b) | 0 : a / b });
+      case "negate": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (-a) | 0 : -a });
+      case "mod": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (a % b) | 0 : a % b });
+      case "sin": return mkNode({ _t: t, type: t, value: Math.sin(a) });
+      case "cos": return mkNode({ _t: t, type: t, value: Math.cos(a) });
+      case "tan": return mkNode({ _t: t, type: t, value: Math.tan(a) });
+      case "asin": return mkNode({ _t: t, type: t, value: Math.asin(a) });
+      case "acos": return mkNode({ _t: t, type: t, value: Math.acos(a) });
+      case "atan": return mkNode({ _t: t, type: t, value: Math.atan(a) });
+      case "abs": return mkNode({ _t: t, type: t, value: Math.abs(a) });
+      case "sign": return mkNode({ _t: t, type: t, value: Math.sign(a) });
+      case "floor": return mkNode({ _t: t, type: t, value: Math.floor(a) });
+      case "ceil": return mkNode({ _t: t, type: t, value: Math.ceil(a) });
+      case "fract": return mkNode({ _t: t, type: t, value: a - Math.floor(a) });
+      case "sqrt": return mkNode({ _t: t, type: t, value: Math.sqrt(a) });
+      case "inversesqrt": return mkNode({ _t: t, type: t, value: 1 / Math.sqrt(a) });
+      case "exp": return mkNode({ _t: t, type: t, value: Math.exp(a) });
+      case "log": return mkNode({ _t: t, type: t, value: Math.log(a) });
+      case "exp2": return mkNode({ _t: t, type: t, value: Math.pow(2, a) });
+      case "log2": return mkNode({ _t: t, type: t, value: Math.log2(a) });
+      case "pow": return mkNode({ _t: t, type: t, value: Math.pow(a, b) });
+      case "min": return mkNode({ _t: t, type: t, value: Math.min(a, b) });
+      case "max": return mkNode({ _t: t, type: t, value: Math.max(a, b) });
+    }
+  }
+  return null;
+}
+
+function mkNode(config: { _t?: string; type: string; params?: BaseNode<ShaderType>[]; value?: unknown }): BaseNode<ShaderType> {
+  return new NodeImpl({ _t: config._t ?? config.type, type: config.type, params: config.params, value: config.value }) as BaseNode<ShaderType>;
+}
+
 function compileGLSLStage(
   node: BaseNode<ShaderType> | ShaderType extends never ? never : any,
   ctx: CompileCtx,
@@ -778,6 +828,10 @@ function compileGLSLStage(
   if (Array.isArray(node)) {
     return { decls: [], body: [], expr: `vec3(${node.join(", ")})` };
   }
+
+  // Constant folding
+  let folded = tryFold(node);
+  if (folded) node = folded;
 
   switch (node.type) {
     case "float": return { decls: [], body: [], expr: String(node.value) };
@@ -1239,6 +1293,10 @@ function compileWGSLStage(
   if (Array.isArray(node)) {
     return { decls: [], body: [], expr: `vec3<f32>(${node.join(", ")})` };
   }
+
+  // Constant folding
+  let folded = tryFold(node);
+  if (folded) node = folded;
 
   switch (node.type) {
     case "float": return { decls: [], body: [], expr: `${node.value}f` };

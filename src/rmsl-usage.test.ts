@@ -351,7 +351,10 @@ describe("RMSL", () => {
   });
 
   it("WGSL coerces int literal to f32 in float context", () => {
-    let prog = Fn(() => float(5).mod(2).toVar());
+    let prog = Fn(() => {
+      let x = float(5).toVar();
+      return x.mod(2).toVar();
+    });
     let wgsl = compileWGSL(prog());
     expect(wgsl).toContain("f32(");
   });
@@ -425,29 +428,31 @@ describe("RMSL", () => {
 
   // === Phase 6: Infrastructure — Comprehensive coverage ===
 
-  // -- All FloatMathOps --
+  // -- All FloatMathOps (constant-folded with literals) --
   it.each([
     "sin", "cos", "tan", "asin", "acos", "atan",
     "abs", "sign", "floor", "ceil", "fract",
     "sqrt", "inversesqrt", "exp", "log", "exp2", "log2",
-  ])("float.%s() compiles to GLSL", (op) => {
+  ])("float.%s() compiles to GLSL (constant-folded)", (op) => {
     let prog = Fn(() => (float(0.5) as any)[op]().toVar());
     let glsl = compileGLSL(prog());
-    expect(glsl).toContain(op);
+    // With constant folding, the result is a literal, not a function call
+    expect(glsl).not.toContain(op);
+    expect(glsl).toMatch(/_rmsl_\d+ = /);
   });
 
-  it("float.pow() compiles to GLSL", () => {
+  it("float.pow() compiles to GLSL (constant-folded)", () => {
     let glsl = compileGLSL(Fn(() => float(2.0).pow(float(3.0)).toVar())());
-    expect(glsl).toContain("pow(2, 3)");
+    expect(glsl).toContain("= 8");
   });
 
-  it("float.min()/max()/mod() compile to GLSL", () => {
+  it("float.min()/max()/mod() compile to GLSL (constant-folded)", () => {
     let glsl1 = compileGLSL(Fn(() => float(5).min(float(3)).toVar())());
-    expect(glsl1).toContain("min");
+    expect(glsl1).toContain("= 3");
     let glsl2 = compileGLSL(Fn(() => float(5).max(float(3)).toVar())());
-    expect(glsl2).toContain("max");
+    expect(glsl2).toContain("= 5");
     let glsl3 = compileGLSL(Fn(() => float(5).mod(float(3)).toVar())());
-    expect(glsl3).toContain("%");
+    expect(glsl3).toContain("= 2");
   });
 
   // -- VecCommonOps --
@@ -497,9 +502,16 @@ describe("RMSL", () => {
 
   // -- IntOps --
   it.each([
-    ["add", "+"], ["sub", "-"], ["mult", "*"], ["div", "/"], ["mod", "%"],
+    ["add", 8], ["sub", 2], ["mult", 15], ["div", 1], ["mod", 2],
+  ])("int.%s() compiles to GLSL (constant-folded)", (op, expected) => {
+    let prog = Fn(() => (int(5) as any)[op](int(3)).toVar());
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain(String(expected));
+  });
+
+  it.each([
     ["bitAnd", "&"], ["bitOr", "|"], ["bitXor", "^"], ["shiftLeft", "<<"], ["shiftRight", ">>"],
-  ])("int.%s() compiles to GLSL", (op, expected) => {
+  ])("int.%s() compiles to GLSL (bitwise)", (op, expected) => {
     let prog = Fn(() => (int(5) as any)[op](int(3)).toVar());
     let glsl = compileGLSL(prog());
     expect(glsl).toContain(expected as string);
