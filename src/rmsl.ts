@@ -48,10 +48,16 @@ type Vec4Swizzles = {
   readonly rgba: Node<"vec4">; readonly rgb: Node<"vec3">;
 };
 
+type Vec2Swizzles = {
+  readonly x: Node<"float">; readonly y: Node<"float">;
+  readonly r: Node<"float">; readonly g: Node<"float">;
+  readonly xy: Node<"vec2">;
+};
+
 // === Node (branded + conditional methods + swizzles) ===
 export type Node<A extends ShaderType> = BaseNode<A>
   & (A extends "float" ? ArithOps<"float"> & FloatMathOps<"float"> : {})
-  & (A extends "vec2" ? ArithOps<"vec2"> & FloatMathOps<"vec2"> & VecCommonOps<"vec2"> : {})
+  & (A extends "vec2" ? ArithOps<"vec2"> & FloatMathOps<"vec2"> & VecCommonOps<"vec2"> & Vec2Swizzles : {})
   & (A extends "vec3" ? ArithOps<"vec3"> & FloatMathOps<"vec3"> & VecCommonOps<"vec3"> & Vec3Ops & Vec3Swizzles : {})
   & (A extends "vec4" ? ArithOps<"vec4"> & FloatMathOps<"vec4"> & VecCommonOps<"vec4"> & Vec4Swizzles : {})
   & (A extends "mat3" ? MatOps<"mat3"> : {})
@@ -83,6 +89,8 @@ interface FloatMathOps<A extends ShaderType> {
   max(other: FloatLike): Node<A>;
   mod(other: FloatLike): Node<A>;
   mix(b: Node<A>, t: FloatLike): Node<A>;
+  clamp(min: FloatLike, max: FloatLike): Node<A>;
+  fwidth(): Node<A>;
   lessThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
   greaterThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
   lessThanEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
@@ -98,10 +106,10 @@ interface VecCommonOps<A extends "vec2" | "vec3" | "vec4"> {
   distance(other: Node<A>): Node<"float">;
   reflect(normal: Node<A>): Node<A>;
   refract(normal: Node<A>, eta: FloatLike): Node<A>;
-  clamp(min: Node<A>, max: Node<A>): Node<A>;
+  clamp(min: Node<A> | FloatLike, max: Node<A> | FloatLike): Node<A>;
   mix(b: Node<A>, t: FloatLike): Node<A>;
-  step(edge: Node<A>): Node<"float">;
-  smoothstep(edge0: Node<A>, edge1: Node<A>): Node<A>;
+  step(edge: Node<A> | FloatLike): Node<"float">;
+  smoothstep(edge0: Node<A> | FloatLike, edge1: Node<A> | FloatLike): Node<A>;
 }
 
 interface Vec3Ops {
@@ -110,8 +118,11 @@ interface Vec3Ops {
 
 interface MatOps<A extends "mat3" | "mat4"> {
   mult(other: Node<A>): Node<A>;
+  mult(other: Node<"vec3">): Node<"vec3">;
+  mult(other: Node<"vec4">): Node<"vec4">;
   multVec(other: Node<"vec3">): Node<"vec3">;
   multVec4(other: Node<"vec4">): Node<"vec4">;
+  element(i: IntLike): Node<A extends "mat3" ? "vec3" : "vec4">;
   inverse(): Node<A>;
   transpose(): Node<A>;
 }
@@ -188,7 +199,12 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   // === ArithOps ===
   add(other: any): any { return op("add", this, other); }
   sub(other: any): any { return op("sub", this, other); }
-  mult(other: any): any { return op("mult", this, other); }
+  mult(other: any): any {
+    if ((this._t === "mat3" || this._t === "mat4") && (other._t === "vec3" || other._t === "vec4")) {
+      return node({ _t: other._t, type: "matVecMul", params: [this as BaseNode<ShaderType>, wrapValue(other) as BaseNode<ShaderType>] });
+    }
+    return op("mult", this, other);
+  }
   div(other: any): any { return op("div", this, other); }
   negate(): any { return op("negate", this); }
 
@@ -234,6 +250,7 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   mix(b: any, t: any): any { return op("mix", this, b, t); }
   step(edge: any): any { return op("step", edge, this); }
   smoothstep(edge0: any, edge1: any): any { return op("smoothstep", this, edge0, edge1); }
+  fwidth(): any { return op1("fwidth", this); }
 
   // === Vec3Ops ===
   cross(other: any): any { return op("cross", this, other); }
@@ -245,6 +262,7 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   multVec4(other: any): any {
     return node({ _t: "vec4", type: "matVecMul", params: [this as BaseNode<ShaderType>, wrapValue(other) as BaseNode<ShaderType>] });
   }
+  element(i: any): any { return op("matrixElement", this, i); }
   inverse() { return op1("inverse", this); }
   transpose() { return op1("transpose", this); }
 
@@ -1035,6 +1053,17 @@ function compileGLSLStage(
     case "length": return unaryGLSL(node, ctx, "length");
     case "transpose": return unaryGLSL(node, ctx, "transpose");
     case "inverse": return unaryGLSL(node, ctx, "inverse");
+    case "fwidth": return unaryGLSL(node, ctx, "fwidth");
+
+    case "matrixElement": {
+      let mat = compileGLSLStage(node.params![0], ctx);
+      let idx = compileGLSLStage(node.params![1], ctx);
+      return {
+        decls: [...mat.decls, ...idx.decls],
+        body: [...mat.body, ...idx.body],
+        expr: `${mat.expr}[${idx.expr}]`,
+      };
+    }
 
     case "texture": return binaryGLSL(node, ctx, "texture", true);
     case "textureLod": {
@@ -1498,6 +1527,17 @@ function compileWGSLStage(
     case "length": return unaryWGSL(node, ctx, "length");
     case "transpose": return unaryWGSL(node, ctx, "transpose");
     case "inverse": return unaryWGSL(node, ctx, "inverse");
+    case "fwidth": return unaryWGSL(node, ctx, "fwidth");
+
+    case "matrixElement": {
+      let mat = compileWGSLStage(node.params![0], ctx);
+      let idx = compileWGSLStage(node.params![1], ctx);
+      return {
+        decls: [...mat.decls, ...idx.decls],
+        body: [...mat.body, ...idx.body],
+        expr: `${mat.expr}[${idx.expr}]`,
+      };
+    }
 
     case "texture":
     case "textureLod": {
