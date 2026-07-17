@@ -66,9 +66,27 @@ void main(void) {
 
 `output("vec4")` declares a `layout(location=N) out vec4 _rmsl_oN;` in the fragment shader.
 
+### Uniforms
+
+`uniform("float")` produces `uniform float _rmsl_uN;` in both vertex and fragment shaders.
+
+You can access the generated name through the `.name` property:
+
+```typescript
+let uTime = uniform("float");
+console.log(uTime.name); // outputs "_rmsl_u0"
+```
+
 ### Varyings
 
 `varying("vec3")` produces `out vec3 _rmsl_vN;` in vertex and `in vec3 _rmsl_vN;` in fragment.
+
+You can access the generated name through the `.name` property:
+
+```typescript
+let v = varying("vec3");
+console.log(v.name); // outputs "_rmsl_v0"
+```
 
 ## WGSL Output
 
@@ -103,6 +121,23 @@ fn main(input: VertexInput) -> VertexOutput {
   // body...
   return VertexOutput(...);
 }
+```
+
+### Attributes
+
+Attributes are declared in the `VertexInput` struct in WGSL:
+
+```typescript
+let pos = attribute("vec3");
+console.log(pos.name); // outputs "_rmsl_a0"
+```
+
+This produces:
+
+```wgsl
+struct VertexInput {
+  @location(0) _rmsl_a0: vec3<f32>,
+};
 ```
 
 ## Binding Model (WGSL)

@@ -191,8 +191,8 @@ While(condition, () => {
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `uniform(type)` | `Node<T>` | Declares a uniform (constant buffer input) |
-| `attribute(type)` | `Node<T>` | Declares a vertex attribute |
-| `varying(type)` | `Node<T>` | Declares a varying (vertex→fragment interpolant) |
+| `uniform(type)` | `Node<T>` | Declares a uniform (constant buffer input). The returned node has a `.name` property containing the generated name (e.g., `_rmsl_u0`). |
+| `attribute(type)` | `Node<T>` | Declares a vertex attribute. The returned node has a `.name` property containing the generated name (e.g., `_rmsl_a0`). |
+| `varying(type)` | `Node<T>` | Declares a varying (vertex→fragment interpolant). The returned node has a `.name` property containing the generated name (e.g., `_rmsl_v0`). |
 | `output(type)` | `Node<T>` | Declares a fragment output with `@location(N)` |
 | `builtinPosition()` | `Node<"vec4">` | Maps to `gl_Position` / `@builtin(position)` |
