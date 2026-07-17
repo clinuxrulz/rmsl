@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   Fn, float, vec2, vec3, vec4, int, boolean,
   mat2, mat2x3, mat2x4, mat3, mat3x2, mat3x4, mat4, mat4x2, mat4x3,
-  If, For, break_, continue_,
+  If, For, While, discard, break_, continue_,
   uniform, attribute, varying, output, builtinPosition,
   compileGLSL, compileWGSL,
 } from "./rmsl";
@@ -421,5 +421,169 @@ describe("RMSL", () => {
     let prog = Fn(() => mat2x3(1,0,0,0,1,0).toVar());
     let glsl = compileGLSL(prog());
     expect(glsl).toContain("mat2x3(");
+  });
+
+  // === Phase 6: Infrastructure — Comprehensive coverage ===
+
+  // -- All FloatMathOps --
+  it.each([
+    "sin", "cos", "tan", "asin", "acos", "atan",
+    "abs", "sign", "floor", "ceil", "fract",
+    "sqrt", "inversesqrt", "exp", "log", "exp2", "log2",
+  ])("float.%s() compiles to GLSL", (op) => {
+    let prog = Fn(() => (float(0.5) as any)[op]().toVar());
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain(op);
+  });
+
+  it("float.pow() compiles to GLSL", () => {
+    let glsl = compileGLSL(Fn(() => float(2.0).pow(float(3.0)).toVar())());
+    expect(glsl).toContain("pow(2, 3)");
+  });
+
+  it("float.min()/max()/mod() compile to GLSL", () => {
+    let glsl1 = compileGLSL(Fn(() => float(5).min(float(3)).toVar())());
+    expect(glsl1).toContain("min");
+    let glsl2 = compileGLSL(Fn(() => float(5).max(float(3)).toVar())());
+    expect(glsl2).toContain("max");
+    let glsl3 = compileGLSL(Fn(() => float(5).mod(float(3)).toVar())());
+    expect(glsl3).toContain("%");
+  });
+
+  // -- VecCommonOps --
+  it.each([
+    "dot", "length", "normalize", "distance",
+  ])("vec3.%s() compiles to GLSL", (op) => {
+    let prog = Fn(() => {
+      let a = vec3(1,2,3).toVar();
+      return (a as any)[op](op === "dot" || op === "distance" ? a : undefined).toVar();
+    });
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain(op);
+  });
+
+  it("vec3.reflect/refract/clamp/mix/step/smoothstep compile to GLSL", () => {
+    let v = vec3(1,2,3);
+    let n = vec3(0,1,0);
+    expect(compileGLSL(Fn(() => v.reflect(n).toVar())())).toContain("reflect");
+    expect(compileGLSL(Fn(() => v.refract(n, float(0.5)).toVar())())).toContain("refract");
+    let zero = vec3(0,0,0);
+    let one = vec3(1,1,1);
+    expect(compileGLSL(Fn(() => v.clamp(zero, one).toVar())())).toContain("clamp");
+    expect(compileGLSL(Fn(() => v.mix(one, float(0.5)).toVar())())).toContain("mix");
+    expect(compileGLSL(Fn(() => v.step(one).toVar())())).toContain("step");
+    expect(compileGLSL(Fn(() => v.smoothstep(one, zero).toVar())())).toContain("smoothstep");
+  });
+
+  it("vec3.cross compiles to GLSL", () => {
+    let glsl = compileGLSL(Fn(() => vec3(1,0,0).cross(vec3(0,1,0)).toVar())());
+    expect(glsl).toContain("cross");
+  });
+
+  // -- MatOps --
+  it("mat3.inverse/transpose compiles to GLSL", () => {
+    let m = mat3(1,0,0,0,1,0,0,0,1);
+    expect(compileGLSL(Fn(() => m.inverse().toVar())())).toContain("inverse");
+    expect(compileGLSL(Fn(() => m.transpose().toVar())())).toContain("transpose");
+  });
+
+  it("mat4.inverse/transpose/multVec4 compiles to GLSL", () => {
+    let m = mat4(1);
+    let v = vec4(1,2,3,4);
+    expect(compileGLSL(Fn(() => m.inverse().toVar())())).toContain("inverse");
+    expect(compileGLSL(Fn(() => m.transpose().toVar())())).toContain("transpose");
+    expect(compileGLSL(Fn(() => m.multVec4(v).toVar())())).toContain("*");
+  });
+
+  // -- IntOps --
+  it.each([
+    ["add", "+"], ["sub", "-"], ["mult", "*"], ["div", "/"], ["mod", "%"],
+    ["bitAnd", "&"], ["bitOr", "|"], ["bitXor", "^"], ["shiftLeft", "<<"], ["shiftRight", ">>"],
+  ])("int.%s() compiles to GLSL", (op, expected) => {
+    let prog = Fn(() => (int(5) as any)[op](int(3)).toVar());
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain(expected as string);
+  });
+
+  // -- BoolOps --
+  it("bool.and/or/not compile to GLSL", () => {
+    let t = boolean(true);
+    let f = boolean(false);
+    expect(compileGLSL(Fn(() => t.and(f).toVar())())).toContain("&&");
+    expect(compileGLSL(Fn(() => t.or(f).toVar())())).toContain("||");
+    expect(compileGLSL(Fn(() => t.not().toVar())())).toContain("!");
+  });
+
+  // -- Type literals --
+  it("int/uint/bool/vec2 literals compile to GLSL", () => {
+    expect(compileGLSL(Fn(() => int(42).toVar())())).toContain("42");
+    expect(compileGLSL(Fn(() => vec2(1,2).toVar())())).toContain("vec2(1, 2)");
+  });
+
+  it("int/uint/bool/vec2 literals compile to WGSL", () => {
+    expect(compileWGSL(Fn(() => int(42).toVar())())).toContain("42i");
+    expect(compileWGSL(Fn(() => vec2(1,2).toVar())())).toContain("vec2<f32>(1, 2)");
+  });
+
+  // -- Control flow: While, discard --
+  it("While loop compiles to GLSL", () => {
+    let prog = Fn(() => {
+      let i = int(0).toVar();
+      While(() => i.lessThan(int(5)), () => {
+        i.assign(i.add(int(1)));
+      });
+      return float(1.0);
+    });
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain("while (");
+  });
+
+  it("discard compiles to GLSL", () => {
+    let prog = Fn(() => {
+      If(boolean(true), () => { discard(); });
+      return float(1.0);
+    });
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain("discard;");
+  });
+
+  it("discard compiles to WGSL", () => {
+    let prog = Fn(() => {
+      If(boolean(true), () => { discard(); });
+      return float(1.0);
+    });
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).toContain("discard;");
+  });
+
+  // -- Edge cases --
+  it("empty Fn does not throw", () => {
+    expect(() => { Fn(() => {}); }).not.toThrow();
+  });
+
+  it("single-statement Fn compiles", () => {
+    expect(() => compileGLSL(Fn(() => float(1.0))())).not.toThrow();
+  });
+
+  it("nested Fn compiles", () => {
+    let inner = Fn(() => float(2.0));
+    let innerVal = inner();
+    let outer = Fn(() => innerVal.add(float(1.0)).toVar());
+    expect(() => compileGLSL(outer())).not.toThrow();
+  });
+
+  // -- Error cases --
+  it("assign outside Fn throws", () => {
+    let x = float(1.0);
+    expect(() => x.assign(float(2.0))).toThrow("assign must be called inside");
+  });
+
+  it("toVar outside Fn throws", () => {
+    let x = float(1.0);
+    expect(() => x.toVar()).toThrow("toVar must be called inside");
+  });
+
+  it("If outside Fn throws", () => {
+    expect(() => If(boolean(true), () => {})).toThrow("must be called inside");
   });
 });

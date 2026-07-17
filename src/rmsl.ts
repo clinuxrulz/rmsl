@@ -1068,6 +1068,7 @@ function compileGLSLStage(
     }
 
     default:
+      console.warn(`[RMSL] Unsupported node type in GLSL compiler: "${node.type}"`);
       return { decls: [], body: [], expr: "0.0" };
   }
 }
@@ -1544,6 +1545,7 @@ function compileWGSLStage(
     }
 
     default:
+      console.warn(`[RMSL] Unsupported node type in WGSL compiler: "${node.type}"`);
       return { decls: [], body: [], expr: "0.0" };
   }
 }
