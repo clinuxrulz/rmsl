@@ -1,5 +1,5 @@
 {
-  "name": "rmsl",
+  "name": "@random-mesh/rmsl",
   "version": "1.0.0",
   "type": "module",
   "main": "./dist/rmsl.js",
