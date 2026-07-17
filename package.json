@@ -2,16 +2,27 @@
   "name": "rmsl",
   "version": "1.0.0",
   "type": "module",
-  "main": "./src/rmsl.ts",
+  "main": "./dist/rmsl.js",
+  "types": "./dist/rmsl.d.ts",
   "exports": {
-    ".": "./src/rmsl.ts"
+    ".": {
+      "import": "./dist/rmsl.js",
+      "types": "./dist/rmsl.d.ts"
+    }
   },
   "scripts": {
+    "build": "vite build",
+    "build:watch": "vite build --watch",
+    "type-check": "tsc --noEmit",
+    "preview": "vite preview",
+    "clean": "rm -rf dist",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@types/node": "^26.1.1",
     "typescript": "^5.7.2",
     "vite": "^7.1.4",
+    "vite-plugin-dts": "^5.0.3",
     "vitest": "^4.1.3"
   }
 }
