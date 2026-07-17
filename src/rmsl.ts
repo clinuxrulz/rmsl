@@ -249,7 +249,7 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   clamp(minV: any, maxV: any): any { return op("clamp", this, minV, maxV); }
   mix(b: any, t: any): any { return op("mix", this, b, t); }
   step(edge: any): any { return op("step", edge, this); }
-  smoothstep(edge0: any, edge1: any): any { return op("smoothstep", this, edge0, edge1); }
+  smoothstep(edge0: any, edge1: any): any { return op("smoothstep", edge0, edge1, this); }
   fwidth(): any { return op1("fwidth", this); }
 
   // === Vec3Ops ===
@@ -474,20 +474,23 @@ export function Fn<T extends any[], R>(fn: (...args: T) => R): (...args: T) => R
       let scope: BaseNode<ShaderType>[] = [];
       blockScope = scope;
       let r = fn(...args);
-      let seqNode = node({
-        _t: "void",
-        type: "seq",
-        params: [...scope, wrapValue(r as any) as BaseNode<ShaderType>],
-      }) as any;
       if (Array.isArray(r)) {
         return r.map((_, i) => {
+          let item = wrapValue((r as any[])[i]) as BaseNode<ShaderType>;
           return node({
-            _t: "void",
+            _t: item._t || "void",
             type: "seq",
-            params: [...scope, wrapValue((r as any[])[i]) as BaseNode<ShaderType>],
+            params: [...scope, item],
           }) as Node<ShaderType>;
         }) as R;
       }
+      let wrappedR = wrapValue(r as any) as BaseNode<ShaderType>;
+      let returnType = wrappedR._t || "void";
+      let seqNode = node({
+        _t: returnType,
+        type: "seq",
+        params: [...scope, wrappedR],
+      }) as any;
       return seqNode;
     } finally {
       blockScope = oldBlockScope;
@@ -1007,10 +1010,10 @@ function compileGLSLStage(
     case "distance": return binaryGLSL(node, ctx, "distance", true);
     case "reflect": return binaryGLSL(node, ctx, "reflect", true);
     case "refract": return binaryGLSL(node, ctx, "refract", true);
-    case "mix": return binaryGLSL(node, ctx, "mix", true);
+    case "mix": return ternaryGLSL(node, ctx, "mix");
     case "step": return binaryGLSL(node, ctx, "step", true);
-    case "smoothstep": return binaryGLSL(node, ctx, "smoothstep", true);
-    case "clamp": return binaryGLSL(node, ctx, "clamp", true);
+    case "smoothstep": return ternaryGLSL(node, ctx, "smoothstep");
+    case "clamp": return ternaryGLSL(node, ctx, "clamp");
     // Comparison ops
     case "lessThan": return comparisonGLSL(node, ctx, "<", "lessThan");
     case "greaterThan": return comparisonGLSL(node, ctx, ">", "greaterThan");
@@ -1245,6 +1248,21 @@ function comparisonGLSL(
     decls: [...a.decls, ...b.decls],
     body: [...a.body, ...b.body],
     expr,
+  };
+}
+
+function ternaryGLSL(
+  node: BaseNode<ShaderType>,
+  ctx: CompileCtx,
+  fn: string,
+): { decls: string[]; body: string[]; expr: string } {
+  let a = compileGLSLStage(node.params![0], ctx);
+  let b = compileGLSLStage(node.params![1], ctx);
+  let c = compileGLSLStage(node.params![2], ctx);
+  return {
+    decls: [...a.decls, ...b.decls, ...c.decls],
+    body: [...a.body, ...b.body, ...c.body],
+    expr: `${fn}(${a.expr}, ${b.expr}, ${c.expr})`,
   };
 }
 
@@ -1491,10 +1509,10 @@ function compileWGSLStage(
     case "distance": return binaryWGSL(node, ctx, "distance", true);
     case "reflect": return binaryWGSL(node, ctx, "reflect", true);
     case "refract": return binaryWGSL(node, ctx, "refract", true);
-    case "mix": return binaryWGSL(node, ctx, "mix", true);
+    case "mix": return ternaryWGSL(node, ctx, "mix");
     case "step": return binaryWGSL(node, ctx, "step", true);
-    case "smoothstep": return binaryWGSL(node, ctx, "smoothstep", true);
-    case "clamp": return binaryWGSL(node, ctx, "clamp", true);
+    case "smoothstep": return ternaryWGSL(node, ctx, "smoothstep");
+    case "clamp": return ternaryWGSL(node, ctx, "clamp");
     // Comparison ops
     case "lessThan": return binaryWGSL(node, ctx, "<");
     case "greaterThan": return binaryWGSL(node, ctx, ">");
@@ -1739,6 +1757,21 @@ function binaryWGSL(
     decls: [...lhs.decls, ...rhs.decls],
     body: [...lhs.body, ...rhs.body],
     expr,
+  };
+}
+
+function ternaryWGSL(
+  node: BaseNode<ShaderType>,
+  ctx: CompileCtx,
+  fn: string,
+): { decls: string[]; body: string[]; expr: string } {
+  let a = compileWGSLStage(node.params![0], ctx);
+  let b = compileWGSLStage(node.params![1], ctx);
+  let c = compileWGSLStage(node.params![2], ctx);
+  return {
+    decls: [...a.decls, ...b.decls, ...c.decls],
+    body: [...a.body, ...b.body, ...c.body],
+    expr: `${fn}(${a.expr}, ${b.expr}, ${c.expr})`,
   };
 }
 

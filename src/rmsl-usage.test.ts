@@ -511,6 +511,26 @@ describe("RMSL", () => {
     expect(compileGLSL(Fn(() => v.smoothstep(one, zero).toVar())())).toContain("smoothstep");
   });
 
+  it("mix/clamp/smoothstep emit 3 args in GLSL", () => {
+    let glsl_mix = compileGLSL(Fn(() => vec3(1,0,0).mix(vec3(0,1,0), float(0.5)).toVar())());
+    expect(glsl_mix).toContain("mix(");
+    expect(glsl_mix).not.toContain("mix(vec3(1, 0, 0), vec3(0, 1, 0))");
+    let glsl_clamp = compileGLSL(Fn(() => float(0.5).clamp(float(0), float(1)).toVar())());
+    expect(glsl_clamp).toContain("clamp(");
+    expect(glsl_clamp).toContain("0, 1");
+    let glsl_ss = compileGLSL(Fn(() => float(0.5).smoothstep(float(0), float(1)).toVar())());
+    expect(glsl_ss).toMatch(/smoothstep\(0, 1, 0\.5/);
+  });
+
+  it("Fn return type is not void for float expression", () => {
+    let prog = Fn(() => {
+      let x = float(1.5).toVar();
+      return x;
+    });
+    let result = prog();
+    expect((result as any)._t).toBe("float");
+  });
+
   it("vec3.cross compiles to GLSL", () => {
     let glsl = compileGLSL(Fn(() => vec3(1,0,0).cross(vec3(0,1,0)).toVar())());
     expect(glsl).toContain("cross");
