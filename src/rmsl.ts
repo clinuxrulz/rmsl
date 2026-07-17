@@ -18,6 +18,7 @@ export type UintLike = number | BaseNode<"uint">;
 export type BooleanLike = boolean | BaseNode<"bool">;
 export type Mat3Like = number[] | BaseNode<"mat3">;
 export type Mat4Like = number[] | BaseNode<"mat4">;
+export type Sampler2DLike = BaseNode<"sampler2D"> | Node<"sampler2D">;
 
 // === BaseNode ===
 export interface BaseNode<A extends ShaderType> {
@@ -54,8 +55,9 @@ export type Node<A extends ShaderType> = BaseNode<A>
   & (A extends "mat3" ? MatOps<"mat3"> : {})
   & (A extends "mat4" ? MatOps<"mat4"> : {})
   & (A extends "int" ? IntOps : {})
-  & (A extends "uint" ? IntOps : {})
+  & (A extends "uint" ? UintOps : {})
   & (A extends "bool" ? BoolOps : {})
+  & (A extends "sampler2D" ? SamplerOps : {})
   & NodeMethods<A>;
 
 // === Operation interfaces (shared across Node types) ===
@@ -78,6 +80,12 @@ interface FloatMathOps<A extends ShaderType> {
   min(other: FloatLike): Node<A>;
   max(other: FloatLike): Node<A>;
   mod(other: FloatLike): Node<A>;
+  lessThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
+  greaterThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
+  lessThanEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
+  greaterThanEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
+  equal(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
+  notEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
 }
 
 interface VecCommonOps<A extends "vec2" | "vec3" | "vec4"> {
@@ -106,16 +114,46 @@ interface MatOps<A extends "mat3" | "mat4"> {
 }
 
 interface IntOps {
-  add(other: IntLike | UintLike): Node<"int">;
-  sub(other: IntLike | UintLike): Node<"int">;
-  mult(other: IntLike | UintLike): Node<"int">;
-  div(other: IntLike | UintLike): Node<"int">;
-  mod(other: IntLike | UintLike): Node<"int">;
-  bitAnd(other: IntLike | UintLike): Node<"int">;
-  bitOr(other: IntLike | UintLike): Node<"int">;
-  bitXor(other: IntLike | UintLike): Node<"int">;
-  shiftLeft(other: IntLike | UintLike): Node<"int">;
-  shiftRight(other: IntLike | UintLike): Node<"int">;
+  add(other: IntLike): Node<"int">;
+  sub(other: IntLike): Node<"int">;
+  mult(other: IntLike): Node<"int">;
+  div(other: IntLike): Node<"int">;
+  mod(other: IntLike): Node<"int">;
+  bitAnd(other: IntLike): Node<"int">;
+  bitOr(other: IntLike): Node<"int">;
+  bitXor(other: IntLike): Node<"int">;
+  shiftLeft(other: IntLike): Node<"int">;
+  shiftRight(other: IntLike): Node<"int">;
+  lessThan(other: IntLike): Node<"bool">;
+  greaterThan(other: IntLike): Node<"bool">;
+  lessThanEqual(other: IntLike): Node<"bool">;
+  greaterThanEqual(other: IntLike): Node<"bool">;
+  equal(other: IntLike): Node<"bool">;
+  notEqual(other: IntLike): Node<"bool">;
+}
+
+interface UintOps {
+  add(other: UintLike): Node<"uint">;
+  sub(other: UintLike): Node<"uint">;
+  mult(other: UintLike): Node<"uint">;
+  div(other: UintLike): Node<"uint">;
+  mod(other: UintLike): Node<"uint">;
+  bitAnd(other: UintLike): Node<"uint">;
+  bitOr(other: UintLike): Node<"uint">;
+  bitXor(other: UintLike): Node<"uint">;
+  shiftLeft(other: UintLike): Node<"uint">;
+  shiftRight(other: UintLike): Node<"uint">;
+  lessThan(other: UintLike): Node<"bool">;
+  greaterThan(other: UintLike): Node<"bool">;
+  lessThanEqual(other: UintLike): Node<"bool">;
+  greaterThanEqual(other: UintLike): Node<"bool">;
+  equal(other: UintLike): Node<"bool">;
+  notEqual(other: UintLike): Node<"bool">;
+}
+
+interface SamplerOps {
+  texture(coords: Vec2Like): Node<"vec4">;
+  textureLod(coords: Vec2Like, lod: FloatLike): Node<"vec4">;
 }
 
 interface BoolOps {
@@ -174,6 +212,14 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   max(other: any) { return op("max", this, other); }
   mod(other: any) { return op("mod", this, other); }
 
+  // === Comparison ops ===
+  lessThan(other: any) { return comp("lessThan", this, other); }
+  greaterThan(other: any) { return comp("greaterThan", this, other); }
+  lessThanEqual(other: any) { return comp("lessThanEqual", this, other); }
+  greaterThanEqual(other: any) { return comp("greaterThanEqual", this, other); }
+  equal(other: any) { return comp("equal", this, other); }
+  notEqual(other: any) { return comp("notEqual", this, other); }
+
   // === VecCommonOps ===
   dot(other: any): any { return op("dot", this, other); }
   length(): any { return op1("length", this); }
@@ -190,8 +236,12 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   cross(other: any): any { return op("cross", this, other); }
 
   // === MatOps ===
-  multVec(other: any): any { return op("matVecMul", this, other); }
-  multVec4(other: any): any { return op("matVecMul", this, other); }
+  multVec(other: any): any {
+    return node({ _t: "vec3", type: "matVecMul", params: [this as BaseNode<ShaderType>, wrapValue(other) as BaseNode<ShaderType>] });
+  }
+  multVec4(other: any): any {
+    return node({ _t: "vec4", type: "matVecMul", params: [this as BaseNode<ShaderType>, wrapValue(other) as BaseNode<ShaderType>] });
+  }
   inverse() { return op1("inverse", this); }
   transpose() { return op1("transpose", this); }
 
@@ -201,6 +251,22 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   bitXor(other: any) { return op("bitXor", this, other); }
   shiftLeft(other: any) { return op("shiftLeft", this, other); }
   shiftRight(other: any) { return op("shiftRight", this, other); }
+
+  // === SamplerOps ===
+  texture(coords: any): any {
+    return node({
+      _t: "vec4",
+      type: "texture",
+      params: [this as BaseNode<ShaderType>, wrapValue(coords) as BaseNode<ShaderType>],
+    });
+  }
+  textureLod(coords: any, lod: any): any {
+    return node({
+      _t: "vec4",
+      type: "textureLod",
+      params: [this as BaseNode<ShaderType>, wrapValue(coords) as BaseNode<ShaderType>, wrapValue(lod) as BaseNode<ShaderType>],
+    });
+  }
 
   // === BoolOps ===
   and(other: any): any { return op("and", this, other); }
@@ -281,6 +347,10 @@ function var_<A extends ShaderType>(varName: string, brandType: string): Node<A>
   });
 }
 
+function isNode(x: any): x is BaseNode<ShaderType> {
+  return typeof x === 'object' && x !== null && '_t' in x && 'type' in x;
+}
+
 // === Value wrapping (convert raw JS -> Node for AST) ===
 type ExtractType<V> =
   V extends FloatLike ? "float" :
@@ -338,6 +408,11 @@ function op1(type: string, a: any): Node<ShaderType> {
   let wrapped = wrapValue(a) as BaseNode<ShaderType>;
   let t = (wrapped as any)?._t || "float";
   return node({ _t: t, type, params: [wrapped] });
+}
+
+function comp(type: string, a: any, b: any): Node<"bool"> {
+  let params = [wrapValue(a) as BaseNode<ShaderType>, wrapValue(b) as BaseNode<ShaderType>];
+  return node({ _t: "bool", type, params }) as Node<"bool">;
 }
 
 function swizzle<A extends ShaderType>(src: BaseNode<ShaderType>, pattern: string): Node<A> {
@@ -413,30 +488,87 @@ function buildBlock(body: () => void): Node<"void"> {
   }
 }
 
-// === Literal constructors ===
-export function float(v: number): Node<"float"> {
+// === Literal constructors (with overloads) ===
+export function float(v: number | Node<"int">): Node<"float"> {
+  if (isNode(v)) {
+    return node({ _t: "float", type: "construct", params: [v] }) as Node<"float">;
+  }
   return node({ _t: "float", type: "float", value: v }) as Node<"float">;
 }
-export function vec2(x: number, y: number): Node<"vec2"> {
+export function vec2(x: number | Node<"float"> | Node<"vec2"> | Node<"vec3"> | Node<"vec4">, y?: number): Node<"vec2"> {
+  if (isNode(x)) {
+    let params = [x as BaseNode<ShaderType>];
+    if (y !== undefined) params.push(wrapValue(y) as BaseNode<ShaderType>);
+    return node({ _t: "vec2", type: "construct", params }) as Node<"vec2">;
+  }
+  if (y === undefined) {
+    return node({ _t: "vec2", type: "construct", params: [wrapValue(x)] }) as Node<"vec2">;
+  }
   return node({ _t: "vec2", type: "vec2", value: [x, y] }) as Node<"vec2">;
 }
-export function vec3(x: number, y: number, z: number): Node<"vec3"> {
+export function vec3(x: number | Node<"float"> | Node<"vec3"> | Node<"vec4">, y?: number, z?: number): Node<"vec3"> {
+  if (isNode(x)) {
+    let params = [x as BaseNode<ShaderType>];
+    if (y !== undefined) params.push(wrapValue(y) as BaseNode<ShaderType>);
+    if (z !== undefined) params.push(wrapValue(z) as BaseNode<ShaderType>);
+    return node({ _t: "vec3", type: "construct", params }) as Node<"vec3">;
+  }
+  if (y === undefined) {
+    return node({ _t: "vec3", type: "construct", params: [wrapValue(x)] }) as Node<"vec3">;
+  }
   return node({ _t: "vec3", type: "vec3", value: [x, y, z] }) as Node<"vec3">;
 }
-export function vec4(x: number, y: number, z: number, w: number): Node<"vec4"> {
-  return node({ _t: "vec4", type: "vec4", value: [x, y, z, w] }) as Node<"vec4">;
+export function vec4(x: number | Node<"float"> | Node<"vec2"> | Node<"vec3"> | Node<"vec4">, y?: number, z?: number, w?: number): Node<"vec4"> {
+  if (isNode(x)) {
+    let params = [x as BaseNode<ShaderType>];
+    if (y !== undefined) params.push(wrapValue(y) as BaseNode<ShaderType>);
+    if (z !== undefined) params.push(wrapValue(z) as BaseNode<ShaderType>);
+    if (w !== undefined) params.push(wrapValue(w) as BaseNode<ShaderType>);
+    return node({ _t: "vec4", type: "construct", params }) as Node<"vec4">;
+  }
+  if (y === undefined) {
+    return node({ _t: "vec4", type: "construct", params: [wrapValue(x)] }) as Node<"vec4">;
+  }
+  return node({ _t: "vec4", type: "vec4", value: [x, y, z!, w!] }) as Node<"vec4">;
 }
-export function int(v: number): Node<"int"> {
+export function int(v: number | Node<"float">): Node<"int"> {
+  if (isNode(v)) {
+    return node({ _t: "int", type: "construct", params: [v] }) as Node<"int">;
+  }
   return node({ _t: "int", type: "int", value: v | 0 }) as Node<"int">;
 }
 export function boolean(v: boolean): Node<"bool"> {
   return node({ _t: "bool", type: "bool", value: v }) as Node<"bool">;
 }
-export function mat3(...vals: number[]): Node<"mat3"> {
-  return node({ _t: "mat3", type: "mat3", value: vals.length ? vals : [1,0,0,0,1,0,0,0,1] }) as Node<"mat3">;
+export function mat3(...args: any[]): Node<"mat3"> {
+  if (args.length === 1 && isNode(args[0])) {
+    return node({ _t: "mat3", type: "construct", params: [args[0] as BaseNode<ShaderType>] }) as Node<"mat3">;
+  }
+  if (args.length === 3 && args.every((a: any) => isNode(a))) {
+    return node({ _t: "mat3", type: "construct", params: args.map((a: any) => a as BaseNode<ShaderType>) }) as Node<"mat3">;
+  }
+  if (args.length === 1 && typeof args[0] === "number") {
+    return node({ _t: "mat3", type: "construct", params: [wrapValue(args[0])] }) as Node<"mat3">;
+  }
+  if (args.length === 0) {
+    return node({ _t: "mat3", type: "mat3", value: [1,0,0,0,1,0,0,0,1] }) as Node<"mat3">;
+  }
+  return node({ _t: "mat3", type: "mat3", value: args }) as Node<"mat3">;
 }
-export function mat4(...vals: number[]): Node<"mat4"> {
-  return node({ _t: "mat4", type: "mat4", value: vals.length ? vals : [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1] }) as Node<"mat4">;
+export function mat4(...args: any[]): Node<"mat4"> {
+  if (args.length === 1 && isNode(args[0])) {
+    return node({ _t: "mat4", type: "construct", params: [args[0] as BaseNode<ShaderType>] }) as Node<"mat4">;
+  }
+  if (args.length === 4 && args.every((a: any) => isNode(a))) {
+    return node({ _t: "mat4", type: "construct", params: args.map((a: any) => a as BaseNode<ShaderType>) }) as Node<"mat4">;
+  }
+  if (args.length === 1 && typeof args[0] === "number") {
+    return node({ _t: "mat4", type: "construct", params: [wrapValue(args[0])] }) as Node<"mat4">;
+  }
+  if (args.length === 0) {
+    return node({ _t: "mat4", type: "mat4", value: [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1] }) as Node<"mat4">;
+  }
+  return node({ _t: "mat4", type: "mat4", value: args }) as Node<"mat4">;
 }
 
 // === Uniforms, Attributes, Varyings ===
@@ -469,6 +601,25 @@ export function varying<T extends ShaderType>(shaderType: T): Node<T> {
     type: "varying",
     value: { id, slot: `_rmsl_v${id}`, shaderType },
   }) as Node<T>;
+}
+
+// === Outputs ===
+let nextOutputId = 0;
+
+export function output<T extends ShaderType>(shaderType: T): Node<T> {
+  let id = nextOutputId++;
+  return node({
+    _t: shaderType,
+    type: "output",
+    value: { id, slot: `_rmsl_o${id}`, shaderType, location: id },
+  }) as Node<T>;
+}
+
+export function builtinPosition(): Node<"vec4"> {
+  return node({
+    _t: "vec4",
+    type: "builtinPosition",
+  }) as Node<"vec4">;
 }
 
 // === Control Flow ===
@@ -552,9 +703,12 @@ export function discard(): void {
 // ========== GLSL Compiler ==========
 interface CompileCtx {
   nextId: number;
+  shaderStage: "vertex" | "fragment";
   uniforms: Map<number, { type: string; slot: string }>;
   attributes: Map<number, { type: string; slot: string }>;
   varyings: Map<number, { type: string; slot: string }>;
+  outputs: Map<number, { type: string; slot: string; location: number }>;
+  wgslSamplers: Map<string, { textureSlot: string; samplerSlot: string }>;
   varDefs: Set<string>;
   inFn: boolean;
 }
@@ -600,6 +754,17 @@ function compileGLSLStage(
     case "mat4": return { decls: [], body: [], expr: `mat4(${(node.value as number[]).join(", ")})` };
     case "void": return { decls: [], body: [], expr: "0.0" };
 
+    case "construct": {
+      let params = (node.params ?? []).map((p: any) => compileGLSLStage(p, ctx));
+      let t = glslType(node._t as string);
+      let args = params.map((p: any) => p.expr).join(", ");
+      return {
+        decls: params.flatMap((p: any) => p.decls),
+        body: params.flatMap((p: any) => p.body),
+        expr: `${t}(${args})`,
+      };
+    }
+
     case "var": {
       let varName = (node.value as any).varName;
       return { decls: [], body: [], expr: varName };
@@ -627,6 +792,18 @@ function compileGLSLStage(
         ctx.varyings.set(v.id, { type: glslType(v.shaderType), slot: v.slot });
       }
       return { decls: [], body: [], expr: v.slot };
+    }
+
+    case "output": {
+      let v = node.value as any;
+      if (!ctx.outputs.has(v.id)) {
+        ctx.outputs.set(v.id, { type: glslType(v.shaderType), slot: v.slot, location: v.location });
+      }
+      return { decls: [], body: [], expr: v.slot };
+    }
+
+    case "builtinPosition": {
+      return { decls: [], body: [], expr: "gl_Position" };
     }
 
     case "swizzle": {
@@ -662,6 +839,14 @@ function compileGLSLStage(
     case "step": return binaryGLSL(node, ctx, "step", true);
     case "smoothstep": return binaryGLSL(node, ctx, "smoothstep", true);
     case "clamp": return binaryGLSL(node, ctx, "clamp", true);
+    // Comparison ops
+    case "lessThan": return comparisonGLSL(node, ctx, "<", "lessThan");
+    case "greaterThan": return comparisonGLSL(node, ctx, ">", "greaterThan");
+    case "lessThanEqual": return comparisonGLSL(node, ctx, "<=", "lessThanEqual");
+    case "greaterThanEqual": return comparisonGLSL(node, ctx, ">=", "greaterThanEqual");
+    case "equal": return comparisonGLSL(node, ctx, "==", "equal");
+    case "notEqual": return comparisonGLSL(node, ctx, "!=", "notEqual");
+
     case "and": return binaryGLSL(node, ctx, "&&");
     case "or": return binaryGLSL(node, ctx, "||");
     case "bitAnd": return binaryGLSL(node, ctx, "&");
@@ -673,6 +858,15 @@ function compileGLSLStage(
     case "matVecMul": {
       let mat = compileGLSLStage(node.params![0], ctx);
       let vec = compileGLSLStage(node.params![1], ctx);
+      let matType = (node.params![0] as any)?._t || "mat4";
+      let vecType = (node.params![1] as any)?._t || "vec3";
+      if (matType === "mat4" && vecType === "vec3") {
+        return {
+          decls: [...mat.decls, ...vec.decls],
+          body: [...mat.body, ...vec.body],
+          expr: `(${mat.expr} * vec4(${vec.expr}, 1.0)).xyz`,
+        };
+      }
       return {
         decls: [...mat.decls, ...vec.decls],
         body: [...mat.body, ...vec.body],
@@ -702,6 +896,18 @@ function compileGLSLStage(
     case "length": return unaryGLSL(node, ctx, "length");
     case "transpose": return unaryGLSL(node, ctx, "transpose");
     case "inverse": return unaryGLSL(node, ctx, "inverse");
+
+    case "texture": return binaryGLSL(node, ctx, "texture", true);
+    case "textureLod": {
+      let sampler = compileGLSLStage(node.params![0], ctx);
+      let coords = compileGLSLStage(node.params![1], ctx);
+      let lod = compileGLSLStage(node.params![2], ctx);
+      return {
+        decls: [...sampler.decls, ...coords.decls, ...lod.decls],
+        body: [...sampler.body, ...coords.body, ...lod.body],
+        expr: `textureLod(${sampler.expr}, ${coords.expr}, ${lod.expr})`,
+      };
+    }
 
     case "let": {
       let lhs = compileGLSLStage(node.params![0], ctx);
@@ -768,12 +974,21 @@ function compileGLSLStage(
       let cond = compileGLSLStage(node.params![1], ctx);
       let update = compileGLSLStage(node.params![2], ctx);
       let body = compileGLSLStage(node.params![3], ctx);
+      let initExpr = init.expr;
+      let initBody = init.body;
+      if (init.body.length > 0) {
+        let lastStmt = init.body[init.body.length - 1];
+        if (lastStmt.endsWith(';')) {
+          initExpr = lastStmt.slice(0, -1);
+          initBody = init.body.slice(0, -1);
+        }
+      }
       return {
         decls: [...init.decls, ...cond.decls, ...update.decls, ...body.decls],
         body: [
-          ...init.body,
+          ...initBody,
           ...cond.body,
-          `for (${init.expr}; ${cond.expr}; ${update.expr}) {`,
+          `for (${initExpr}; ${cond.expr}; ${update.expr}) {`,
           ...body.body.map(l => "  " + l),
           "}",
         ],
@@ -823,6 +1038,24 @@ function binaryGLSL(
   };
 }
 
+function comparisonGLSL(
+  node: BaseNode<ShaderType>,
+  ctx: CompileCtx,
+  op: string,
+  fnName: string,
+): { decls: string[]; body: string[]; expr: string } {
+  let a = compileGLSLStage(node.params![0], ctx);
+  let b = compileGLSLStage(node.params![1], ctx);
+  let type = (node.params![0] as any)?._t || "float";
+  let isVec = type === "vec2" || type === "vec3" || type === "vec4";
+  let expr = isVec ? `${fnName}(${a.expr}, ${b.expr})` : `(${a.expr} ${op} ${b.expr})`;
+  return {
+    decls: [...a.decls, ...b.decls],
+    body: [...a.body, ...b.body],
+    expr,
+  };
+}
+
 function unaryGLSL(
   node: BaseNode<ShaderType>,
   ctx: CompileCtx,
@@ -836,12 +1069,18 @@ function unaryGLSL(
   };
 }
 
-export function compileGLSL(root: Node<ShaderType> | Node<ShaderType>[]): string {
+function compileGLSLWithStage(
+  root: Node<ShaderType> | Node<ShaderType>[],
+  shaderStage: "vertex" | "fragment",
+): string {
   let ctx: CompileCtx = {
     nextId: 0,
+    shaderStage,
     uniforms: new Map(),
     attributes: new Map(),
     varyings: new Map(),
+    outputs: new Map(),
+    wgslSamplers: new Map(),
     varDefs: new Set(),
     inFn: false,
   };
@@ -849,8 +1088,10 @@ export function compileGLSL(root: Node<ShaderType> | Node<ShaderType>[]): string
   let nodes = Array.isArray(root) ? root : [root];
   let results = nodes.map(n => compileGLSLStage(n, ctx));
   let allBody: string[] = [];
+  let lastExpr = "0.0";
   for (let r of results) {
     allBody.push(...r.decls, ...r.body);
+    lastExpr = r.expr;
   }
 
   let lines: string[] = [];
@@ -865,19 +1106,54 @@ export function compileGLSL(root: Node<ShaderType> | Node<ShaderType>[]): string
     lines.push(`in ${info.type} ${info.slot};`);
   });
   ctx.varyings.forEach((info) => {
-    lines.push(`out ${info.type} ${info.slot};`);
+    if (shaderStage === "vertex") {
+      lines.push(`out ${info.type} ${info.slot};`);
+    } else {
+      lines.push(`in ${info.type} ${info.slot};`);
+    }
   });
-  if (ctx.uniforms.size > 0 || ctx.attributes.size > 0 || ctx.varyings.size > 0) {
+  ctx.outputs.forEach((info) => {
+    lines.push(`layout(location=${info.location}) out ${info.type} ${info.slot};`);
+  });
+  if (ctx.uniforms.size > 0 || ctx.attributes.size > 0 || ctx.outputs.size > 0) {
     lines.push("");
   }
 
-  lines.push("void main(void) {");
-  for (let line of allBody) {
-    lines.push("  " + line);
+  if (shaderStage === "vertex") {
+    lines.push("void main(void) {");
+    for (let line of allBody) {
+      lines.push("  " + line);
+    }
+    if (lastExpr !== "0.0") {
+      lines.push(`  gl_Position = ${lastExpr};`);
+    }
+    lines.push("}");
+  } else {
+    lines.push("void main(void) {");
+    for (let line of allBody) {
+      lines.push("  " + line);
+    }
+    if (ctx.outputs.size > 0) {
+      ctx.outputs.forEach((info, id) => {
+        lines.push(`  ${info.slot} = ${lastExpr};`);
+      });
+    }
+    lines.push("}");
   }
-  lines.push("}");
   return lines.join("\n");
 }
+
+export const compileGLSL: {
+  (root: Node<ShaderType> | Node<ShaderType>[]): string;
+  vertex(root: Node<ShaderType> | Node<ShaderType>[]): string;
+  fragment(root: Node<ShaderType> | Node<ShaderType>[]): string;
+} = Object.assign(
+  (root: Node<ShaderType> | Node<ShaderType>[]) => compileGLSLWithStage(root, "fragment"),
+  {
+    vertex: (root: Node<ShaderType> | Node<ShaderType>[]) => compileGLSLWithStage(root, "vertex"),
+    fragment: (root: Node<ShaderType> | Node<ShaderType>[]) => compileGLSLWithStage(root, "fragment"),
+  },
+);
 
 // ========== WGSL Compiler ==========
 let typeToWGSL: Record<string, string> = {
@@ -921,6 +1197,17 @@ function compileWGSLStage(
     case "mat4": return { decls: [], body: [], expr: `mat4x4<f32>(${(node.value as number[]).join(", ")})` };
     case "void": return { decls: [], body: [], expr: "0.0" };
 
+    case "construct": {
+      let params = (node.params ?? []).map((p: any) => compileWGSLStage(p, ctx));
+      let t = wgslType(node._t as string);
+      let args = params.map((p: any) => p.expr).join(", ");
+      return {
+        decls: params.flatMap((p: any) => p.decls),
+        body: params.flatMap((p: any) => p.body),
+        expr: `${t}(${args})`,
+      };
+    }
+
     case "var": {
       let varName = (node.value as any).varName;
       return { decls: [], body: [], expr: varName };
@@ -948,6 +1235,18 @@ function compileWGSLStage(
         ctx.varyings.set(v.id, { type: wgslType(v.shaderType), slot: v.slot });
       }
       return { decls: [], body: [], expr: v.slot };
+    }
+
+    case "output": {
+      let v = node.value as any;
+      if (!ctx.outputs.has(v.id)) {
+        ctx.outputs.set(v.id, { type: wgslType(v.shaderType), slot: v.slot, location: v.location });
+      }
+      return { decls: [], body: [], expr: v.slot };
+    }
+
+    case "builtinPosition": {
+      return { decls: [], body: [], expr: "position" };
     }
 
     case "swizzle": {
@@ -982,6 +1281,14 @@ function compileWGSLStage(
     case "step": return binaryWGSL(node, ctx, "step", true);
     case "smoothstep": return binaryWGSL(node, ctx, "smoothstep", true);
     case "clamp": return binaryWGSL(node, ctx, "clamp", true);
+    // Comparison ops
+    case "lessThan": return binaryWGSL(node, ctx, "<");
+    case "greaterThan": return binaryWGSL(node, ctx, ">");
+    case "lessThanEqual": return binaryWGSL(node, ctx, "<=");
+    case "greaterThanEqual": return binaryWGSL(node, ctx, ">=");
+    case "equal": return binaryWGSL(node, ctx, "==");
+    case "notEqual": return binaryWGSL(node, ctx, "!=");
+
     case "and": return binaryWGSL(node, ctx, "&&");
     case "or": return binaryWGSL(node, ctx, "||");
     case "bitAnd": return binaryWGSL(node, ctx, "&");
@@ -993,6 +1300,15 @@ function compileWGSLStage(
     case "matVecMul": {
       let mat = compileWGSLStage(node.params![0], ctx);
       let vec = compileWGSLStage(node.params![1], ctx);
+      let matType = (node.params![0] as any)?._t || "mat4";
+      let vecType = (node.params![1] as any)?._t || "vec3";
+      if (matType === "mat4" && vecType === "vec3") {
+        return {
+          decls: [...mat.decls, ...vec.decls],
+          body: [...mat.body, ...vec.body],
+          expr: `(${mat.expr} * vec4<f32>(${vec.expr}, 1.0)).xyz`,
+        };
+      }
       return {
         decls: [...mat.decls, ...vec.decls],
         body: [...mat.body, ...vec.body],
@@ -1021,6 +1337,35 @@ function compileWGSLStage(
     case "length": return unaryWGSL(node, ctx, "length");
     case "transpose": return unaryWGSL(node, ctx, "transpose");
     case "inverse": return unaryWGSL(node, ctx, "inverse");
+
+    case "texture":
+    case "textureLod": {
+      let samplerNode = node.params![0];
+      let samplerCompiled = compileWGSLStage(samplerNode, ctx);
+      let coords = compileWGSLStage(node.params![1], ctx);
+      let samplerSlot = (samplerNode.value as any)?.slot;
+      if (samplerSlot && !ctx.wgslSamplers.has(samplerSlot)) {
+        ctx.wgslSamplers.set(samplerSlot, {
+          textureSlot: samplerSlot,
+          samplerSlot: samplerSlot + "_s",
+        });
+      }
+      let samplerName = samplerSlot ? samplerSlot + "_s" : "sampler";
+      if (node.type === "texture") {
+        return {
+          decls: [...samplerCompiled.decls, ...coords.decls],
+          body: [...samplerCompiled.body, ...coords.body],
+          expr: `textureSample(${samplerCompiled.expr}, ${samplerName}, ${coords.expr})`,
+        };
+      } else {
+        let lod = compileWGSLStage(node.params![2], ctx);
+        return {
+          decls: [...samplerCompiled.decls, ...coords.decls, ...lod.decls],
+          body: [...samplerCompiled.body, ...coords.body, ...lod.body],
+          expr: `textureSampleLevel(${samplerCompiled.expr}, ${samplerName}, ${coords.expr}, ${lod.expr})`,
+        };
+      }
+    }
 
     case "let": {
       let lhs = compileWGSLStage(node.params![0], ctx);
@@ -1087,11 +1432,22 @@ function compileWGSLStage(
       let cd = compileWGSLStage(node.params![1], ctx);
       let update = compileWGSLStage(node.params![2], ctx);
       let body = compileWGSLStage(node.params![3], ctx);
+      let initExpr = init.expr;
+      let initBody = init.body;
+      if (init.body.length > 0) {
+        let lastStmt = init.body[init.body.length - 1];
+        if (lastStmt.endsWith(';')) {
+          let converted = lastStmt.slice(0, -1);
+          // WGSL for-init needs var not let (skip let prefix)
+          initExpr = converted;
+          initBody = init.body.slice(0, -1);
+        }
+      }
       return {
         decls: [...init.decls, ...cd.decls, ...update.decls, ...body.decls],
         body: [
-          ...init.body,
-          `for (${init.expr}; ${cd.expr}; ${update.expr}) {`,
+          ...initBody,
+          `for (${initExpr}; ${cd.expr}; ${update.expr}) {`,
           ...body.body.map(l => "  " + l),
           "}",
         ],
@@ -1154,12 +1510,18 @@ function unaryWGSL(
   };
 }
 
-export function compileWGSL(root: Node<ShaderType> | Node<ShaderType>[]): string {
+function compileWGSLWithStage(
+  root: Node<ShaderType> | Node<ShaderType>[],
+  shaderStage: "vertex" | "fragment",
+): string {
   let ctx: CompileCtx = {
     nextId: 0,
+    shaderStage,
     uniforms: new Map(),
     attributes: new Map(),
     varyings: new Map(),
+    outputs: new Map(),
+    wgslSamplers: new Map(),
     varDefs: new Set(),
     inFn: false,
   };
@@ -1167,20 +1529,86 @@ export function compileWGSL(root: Node<ShaderType> | Node<ShaderType>[]): string
   let nodes = Array.isArray(root) ? root : [root];
   let results = nodes.map(n => compileWGSLStage(n, ctx));
   let allBody: string[] = [];
+  let lastExpr = "0.0";
   for (let r of results) {
     allBody.push(...r.decls, ...r.body);
+    lastExpr = r.expr;
   }
 
   let lines: string[] = [];
+  let bindingId = 0;
   ctx.uniforms.forEach((info) => {
-    lines.push(`@group(0) @binding(0) var<uniform> ${info.slot}: ${info.type};`);
+    if (info.type === "texture_2d<f32>" || info.type === "texture_cube<f32>") {
+      lines.push(`@group(0) @binding(${bindingId++}) var ${info.slot}: ${info.type};`);
+    } else {
+      lines.push(`@group(0) @binding(${bindingId++}) var<uniform> ${info.slot}: ${info.type};`);
+    }
   });
-  lines.push("");
-  lines.push("@fragment");
-  lines.push("fn main() {");
-  for (let line of allBody) {
-    lines.push("  " + line);
+  ctx.wgslSamplers.forEach((info) => {
+    lines.push(`@group(0) @binding(${bindingId++}) var ${info.samplerSlot}: sampler;`);
+  });
+  if (ctx.uniforms.size > 0 || ctx.wgslSamplers.size > 0 || ctx.outputs.size > 0) {
+    lines.push("");
   }
-  lines.push("}");
+
+  if (shaderStage === "vertex") {
+    lines.push("struct VertexOutput {");
+    lines.push("  @builtin(position) position: vec4<f32>,");
+    ctx.varyings.forEach((info) => {
+      lines.push(`  @location(0) ${info.slot}: ${info.type},`);
+    });
+    ctx.outputs.forEach((info) => {
+      lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
+    });
+    lines.push("};");
+    lines.push("");
+    lines.push("@vertex");
+    lines.push("fn main() -> VertexOutput {");
+    for (let line of allBody) {
+      lines.push("  " + line);
+    }
+    if (lastExpr !== "0.0") {
+      lines.push(`  return VertexOutput(${lastExpr});`);
+    } else {
+      lines.push("  return VertexOutput();");
+    }
+    lines.push("}");
+  } else {
+    lines.push("struct FragmentOutput {");
+    ctx.outputs.forEach((info) => {
+      lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
+    });
+    if (ctx.outputs.size === 0) {
+      lines.push("  @location(0) _rmsl_fragColor: vec4<f32>,");
+    }
+    lines.push("};");
+    lines.push("");
+    lines.push("@fragment");
+    lines.push("fn main() -> FragmentOutput {");
+    for (let line of allBody) {
+      lines.push("  " + line);
+    }
+    if (ctx.outputs.size > 0) {
+      let firstOutput = ctx.outputs.values().next().value;
+      lines.push(`  return FragmentOutput(${lastExpr});`);
+    } else if (lastExpr !== "0.0") {
+      lines.push(`  return FragmentOutput(${lastExpr});`);
+    } else {
+      lines.push("  return FragmentOutput();");
+    }
+    lines.push("}");
+  }
   return lines.join("\n");
 }
+
+export const compileWGSL: {
+  (root: Node<ShaderType> | Node<ShaderType>[]): string;
+  vertex(root: Node<ShaderType> | Node<ShaderType>[]): string;
+  fragment(root: Node<ShaderType> | Node<ShaderType>[]): string;
+} = Object.assign(
+  (root: Node<ShaderType> | Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
+  {
+    vertex: (root: Node<ShaderType> | Node<ShaderType>[]) => compileWGSLWithStage(root, "vertex"),
+    fragment: (root: Node<ShaderType> | Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
+  },
+);
