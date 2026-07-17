@@ -1,6 +1,8 @@
 import {
   compileGLSL, compileWGSL, float, Fn, If, uniform, varying, output,
   attribute, boolean, Node, vec2, vec3, vec4, builtinFragDepth,
+  isUniformNode, isAttributeNode, isVaryingNode,
+  UniformNode, AttributeNode, VaryingNode,
 } from "rmsl";
 
 // === Shared RMSL declarations (used in both vertex & fragment) ===
@@ -12,6 +14,16 @@ let cameraViewMatrix = uniform("mat4");
 let cameraProjectionMatrixInverse = uniform("mat4");
 let cameraWorldMatrix = uniform("mat4");
 let cameraPosition = uniform("vec3");
+
+// Type-asserted for name access
+let quadPosNode = quadPos as AttributeNode<"vec2">;
+let positionWorldNode = positionWorld as VaryingNode<"vec3">;
+let positionGeometryNode = positionGeometry as VaryingNode<"vec3">;
+let cameraProjectionMatrixNode = cameraProjectionMatrix as UniformNode<"mat4">;
+let cameraViewMatrixNode = cameraViewMatrix as UniformNode<"mat4">;
+let cameraProjectionMatrixInverseNode = cameraProjectionMatrixInverse as UniformNode<"mat4">;
+let cameraWorldMatrixNode = cameraWorldMatrix as UniformNode<"mat4">;
+let cameraPositionNode = cameraPosition as UniformNode<"vec3">;
 
 // === Vertex shader — full-screen quad ===
 let vertexMain = Fn(() => {
@@ -277,17 +289,17 @@ gl.bindVertexArray(vao);
 let vbo = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
 gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
-let attrLoc = gl.getAttribLocation(program, "_rmsl_a0");
+let attrLoc = gl.getAttribLocation(program, quadPosNode.name);
 gl.enableVertexAttribArray(attrLoc);
 gl.vertexAttribPointer(attrLoc, 2, gl.FLOAT, false, 0, 0);
 
 // Uniform locations
 let uniforms = {
-  projection: gl.getUniformLocation(program, "_rmsl_u0"),
-  view: gl.getUniformLocation(program, "_rmsl_u1"),
-  projInv: gl.getUniformLocation(program, "_rmsl_u2"),
-  world: gl.getUniformLocation(program, "_rmsl_u3"),
-  camPos: gl.getUniformLocation(program, "_rmsl_u4"),
+  projection: gl.getUniformLocation(program, cameraProjectionMatrixNode.name),
+  view: gl.getUniformLocation(program, cameraViewMatrixNode.name),
+  projInv: gl.getUniformLocation(program, cameraProjectionMatrixInverseNode.name),
+  world: gl.getUniformLocation(program, cameraWorldMatrixNode.name),
+  camPos: gl.getUniformLocation(program, cameraPositionNode.name),
 };
 
 // === Pointer / wheel events ===
