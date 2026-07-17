@@ -447,13 +447,14 @@ export function assertBlockScope(
 // === Fn - macro that captures statements into a seq node ===
 // Supports single return: Fn(() => { ...; return x; }) -> () => Node<A>
 // Supports multi return: Fn(() => { ...; return [a, b]; }) -> () => [Node<A>, Node<B>]
-export function Fn<T>(fn: () => T): () => T {
-  return (() => {
+// Supports parameters: Fn((a: Node<"float">, b: Node<"float">) => a.add(b)) -> (a, b) => Node<"float">
+export function Fn<T extends any[], R>(fn: (...args: T) => R): (...args: T) => R {
+  return ((...args: T) => {
     let oldBlockScope = blockScope;
     try {
       let scope: BaseNode<ShaderType>[] = [];
       blockScope = scope;
-      let r = fn();
+      let r = fn(...args);
       let seqNode = node({
         _t: "void",
         type: "seq",
@@ -466,7 +467,7 @@ export function Fn<T>(fn: () => T): () => T {
             type: "seq",
             params: [...scope, wrapValue((r as any[])[i]) as BaseNode<ShaderType>],
           }) as Node<ShaderType>;
-        }) as T;
+        }) as R;
       }
       return seqNode;
     } finally {
