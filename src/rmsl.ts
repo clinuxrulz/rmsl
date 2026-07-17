@@ -695,6 +695,13 @@ export function builtinPosition(): Node<"vec4"> {
   }) as Node<"vec4">;
 }
 
+export function builtinFragDepth(): Node<"float"> {
+  return node({
+    _t: "float",
+    type: "builtinFragDepth",
+  }) as Node<"float">;
+}
+
 // === Control Flow ===
 
 type ElseIfChain = {
@@ -805,6 +812,7 @@ interface CompileCtx {
   wgslSamplers: Map<string, { textureSlot: string; samplerSlot: string }>;
   varDefs: Set<string>;
   inFn: boolean;
+  fragDepthUsed: boolean;
 }
 
 let typeToGLSL: Record<string, string> = {
@@ -961,6 +969,13 @@ function compileGLSLStage(
 
     case "builtinPosition": {
       return { decls: [], body: [], expr: "gl_Position" };
+    }
+
+    case "builtinFragDepth": {
+      if (ctx.shaderStage !== "fragment") {
+        throw new Error("builtinFragDepth() can only be used in fragment shaders");
+      }
+      return { decls: [], body: [], expr: "gl_FragDepth" };
     }
 
     case "swizzle": {
@@ -1260,6 +1275,7 @@ function compileGLSLWithStage(
     wgslSamplers: new Map(),
     varDefs: new Set(),
     inFn: false,
+    fragDepthUsed: false,
   };
 
   let nodes = Array.isArray(root) ? root : [root];
@@ -1437,6 +1453,14 @@ function compileWGSLStage(
 
     case "builtinPosition": {
       return { decls: [], body: [], expr: "position" };
+    }
+
+    case "builtinFragDepth": {
+      if (ctx.shaderStage !== "fragment") {
+        throw new Error("builtinFragDepth() can only be used in fragment shaders");
+      }
+      ctx.fragDepthUsed = true;
+      return { decls: ["var _rmsl_fragDepth: f32 = 1.0;"], body: [], expr: "_rmsl_fragDepth" };
     }
 
     case "swizzle": {
@@ -1745,6 +1769,7 @@ function compileWGSLWithStage(
     wgslSamplers: new Map(),
     varDefs: new Set(),
     inFn: false,
+    fragDepthUsed: false,
   };
 
   let nodes = Array.isArray(root) ? root : [root];
@@ -1815,8 +1840,11 @@ function compileWGSLWithStage(
     ctx.outputs.forEach((info) => {
       lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
     });
-    if (ctx.outputs.size === 0) {
+    if (ctx.outputs.size === 0 && !ctx.fragDepthUsed) {
       lines.push("  @location(0) _rmsl_fragColor: vec4<f32>,");
+    }
+    if (ctx.fragDepthUsed) {
+      lines.push("  @builtin(frag_depth) _rmsl_fragDepth: f32,");
     }
     lines.push("};");
     lines.push("");
@@ -1826,9 +1854,17 @@ function compileWGSLWithStage(
       lines.push("  " + line);
     }
     if (lastExpr !== "0.0") {
-      lines.push(`  return FragmentOutput(${lastExpr});`);
+      if (ctx.fragDepthUsed) {
+        lines.push(`  return FragmentOutput(${lastExpr}, _rmsl_fragDepth);`);
+      } else {
+        lines.push(`  return FragmentOutput(${lastExpr});`);
+      }
     } else {
-      lines.push("  return FragmentOutput();");
+      if (ctx.fragDepthUsed) {
+        lines.push("  return FragmentOutput(0.0, _rmsl_fragDepth);");
+      } else {
+        lines.push("  return FragmentOutput();");
+      }
     }
     lines.push("}");
   }

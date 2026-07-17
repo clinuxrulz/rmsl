@@ -3,7 +3,7 @@ import {
   Fn, float, vec2, vec3, vec4, int, boolean,
   mat2, mat2x3, mat2x4, mat3, mat3x2, mat3x4, mat4, mat4x2, mat4x3,
   If, For, While, discard, break_, continue_,
-  uniform, attribute, varying, output, builtinPosition,
+  uniform, attribute, varying, output, builtinPosition, builtinFragDepth,
   compileGLSL, compileWGSL,
 } from "./rmsl";
 
@@ -298,6 +298,37 @@ describe("RMSL", () => {
     });
     let wgsl = compileWGSL.vertex(prog());
     expect(wgsl).toContain("position");
+  });
+
+  it("builtinFragDepth() maps to gl_FragDepth in GLSL fragment", () => {
+    let prog = Fn(() => {
+      let fd = builtinFragDepth();
+      fd.assign(float(0.5));
+      return float(1.0);
+    });
+    let glsl = compileGLSL.fragment(prog());
+    expect(glsl).toContain("gl_FragDepth");
+    expect(glsl).toContain("gl_FragDepth = 0.5");
+  });
+
+  it("builtinFragDepth() maps to @builtin(frag_depth) in WGSL fragment", () => {
+    let prog = Fn(() => {
+      let fd = builtinFragDepth();
+      fd.assign(float(0.5));
+      return float(1.0);
+    });
+    let wgsl = compileWGSL.fragment(prog());
+    expect(wgsl).toContain("@builtin(frag_depth)");
+    expect(wgsl).toContain("_rmsl_fragDepth = 0.5");
+  });
+
+  it("builtinFragDepth() throws in vertex shader", () => {
+    let prog = Fn(() => {
+      let fd = builtinFragDepth();
+      return fd;
+    });
+    expect(() => compileGLSL.vertex(prog())).toThrow("builtinFragDepth");
+    expect(() => compileWGSL.vertex(prog())).toThrow("builtinFragDepth");
   });
 
   it("varying is out in vertex, in in fragment GLSL", () => {

@@ -1,4 +1,4 @@
-import { compileGLSL, float, Fn, If, uniform, varying, Node, vec3, vec4, compileWGSL } from "rmsl";
+import { compileGLSL, float, Fn, If, uniform, varying, Node, vec3, vec4, compileWGSL, builtinFragDepth } from "rmsl";
 
 let cameraProjectionMatrix = uniform("mat4");
 let cameraViewMatrix = uniform("mat4");
@@ -39,7 +39,7 @@ let calcColourAndDepth = Fn(() => {
   });
 
   let colour = vec3(0.7, 0.7, 0.7).toVar();
-  let fragDepth = float(1.0).toVar();
+  let fragDepth = builtinFragDepth();
 
   let groundColour = vec3(0.7, 0.7, 0.7).toVar();
   let gridColour = vec3(0.5, 0.5, 0.5).toVar();
@@ -97,7 +97,7 @@ let calcColourAndDepth = Fn(() => {
     fragDepth.assign(ndcZ.mult(0.5).add(0.5));
   });
 
-  return vec4(colour, fragDepth);
+  return vec4(colour, 1.0);
 });
 
 let result = calcColourAndDepth();
