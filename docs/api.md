@@ -176,7 +176,7 @@ For(
 ### While
 
 ```typescript
-While(() => condition(), () => {
+While(condition, () => {
   // loop body
 });
 ```

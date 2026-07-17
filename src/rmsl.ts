@@ -712,9 +712,9 @@ export function For<T extends Node<ShaderType>>(
   });
 }
 
-export function While(cond: () => BooleanLike, body: () => void): void {
+export function While(cond: BooleanLike, body: () => void): void {
   assertBlockScope("While", (scope) => {
-    let condNode = wrapValue(cond()) as BaseNode<ShaderType>;
+    let condNode = wrapValue(cond) as BaseNode<ShaderType>;
     let bodyNode = buildBlock(body);
     scope.push(node({
       _t: "void",

@@ -541,7 +541,7 @@ describe("RMSL", () => {
   it("While loop compiles to GLSL", () => {
     let prog = Fn(() => {
       let i = int(0).toVar();
-      While(() => i.lessThan(int(5)), () => {
+      While(i.lessThan(int(5)), () => {
         i.assign(i.add(int(1)));
       });
       return float(1.0);
