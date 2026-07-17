@@ -164,10 +164,10 @@ If(cond, () => {
 
 ```typescript
 For(
-  () => { let i = int(0).toVar(); },  // init
-  () => i.lessThan(int(10)),           // condition
-  () => { i.assign(i.add(int(1))); },  // update
-  () => {                               // body
+  () => int(0).toVar(),                // init — returns loop variable
+  (i) => i.lessThan(int(10)),          // condition — receives variable
+  (i) => { i.assign(i.add(int(1))); }, // update — receives variable
+  (i) => {                              // body — receives variable
     // loop body
   },
 );
