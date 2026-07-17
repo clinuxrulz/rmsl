@@ -1873,7 +1873,7 @@ function compileWGSLWithStage(
     ctx.outputs.forEach((info) => {
       lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
     });
-    if (ctx.outputs.size === 0 && !ctx.fragDepthUsed) {
+    if (ctx.outputs.size === 0) {
       lines.push("  @location(0) _rmsl_fragColor: vec4<f32>,");
     }
     if (ctx.fragDepthUsed) {
