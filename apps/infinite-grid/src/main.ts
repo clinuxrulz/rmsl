@@ -233,6 +233,12 @@ function getCameraPosition(): [number, number, number] {
 let canvas = document.createElement("canvas");
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
+canvas.style.position = "fixed";
+canvas.style.top = "0";
+canvas.style.left = "0";
+canvas.style.zIndex = "0";
+canvas.style.touchAction = "none";
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 document.body.appendChild(canvas);
 
 let gl = canvas.getContext("webgl2")!;
@@ -286,12 +292,18 @@ let uniforms = {
 
 // === Pointer / wheel events ===
 canvas.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
   isDragging = true;
   lastMX = e.clientX;
   lastMY = e.clientY;
-  canvas.setPointerCapture(e.pointerId);
+  try {
+    canvas.setPointerCapture(e.pointerId);
+  } catch (err) {
+    console.warn("setPointerCapture failed:", err);
+  }
 });
 canvas.addEventListener("pointermove", (e) => {
+  e.preventDefault();
   if (!isDragging) return;
   let dx = e.clientX - lastMX;
   let dy = e.clientY - lastMY;
@@ -302,7 +314,27 @@ canvas.addEventListener("pointermove", (e) => {
 });
 canvas.addEventListener("pointerup", (e) => {
   isDragging = false;
-  canvas.releasePointerCapture(e.pointerId);
+  try {
+    canvas.releasePointerCapture(e.pointerId);
+  } catch (err) {
+    console.warn("releasePointerCapture failed:", err);
+  }
+});
+canvas.addEventListener("pointercancel", (e) => {
+  isDragging = false;
+  try {
+    canvas.releasePointerCapture(e.pointerId);
+  } catch (err) {
+    console.warn("releasePointerCapture failed:", err);
+  }
+});
+canvas.addEventListener("pointerleave", (e) => {
+  isDragging = false;
+  try {
+    canvas.releasePointerCapture(e.pointerId);
+  } catch (err) {
+    console.warn("releasePointerCapture failed:", err);
+  }
 });
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
