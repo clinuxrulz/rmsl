@@ -323,4 +323,35 @@ describe("RMSL", () => {
     let glsl = compileGLSL(prog());
     expect(glsl).toContain("for (int _rmsl_");
   });
+
+  // === Phase 4: WGSL Polish ===
+  it("WGSL vertex has VertexInput struct with attributes", () => {
+    let prog = Fn(() => {
+      let pos = attribute("vec3");
+      let mvp = uniform("mat4");
+      return mvp.multVec(pos);
+    });
+    let wgsl = compileWGSL.vertex(prog());
+    expect(wgsl).toContain("struct VertexInput");
+    expect(wgsl).toContain("@location(0)");
+    expect(wgsl).toMatch(/input\._rmsl_a\d/);
+  });
+
+  it("WGSL uniforms use @group(0), textures @group(1), samplers @group(2)", () => {
+    let prog = Fn(() => {
+      let u = uniform("float");
+      let tex = uniform("sampler2D");
+      return tex.texture(vec2(0, 0)).add(u);
+    });
+    let wgsl = compileWGSL.fragment(prog());
+    expect(wgsl).toContain("@group(0) @binding(0) var<uniform>");
+    expect(wgsl).toContain("@group(1) @binding(0) var ");
+    expect(wgsl).toContain("@group(2) @binding(0) var ");
+  });
+
+  it("WGSL coerces int literal to f32 in float context", () => {
+    let prog = Fn(() => float(5).mod(2).toVar());
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).toContain("f32(");
+  });
 });

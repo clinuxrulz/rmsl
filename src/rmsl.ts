@@ -1226,7 +1226,7 @@ function compileWGSLStage(
       if (!ctx.attributes.has(v.id)) {
         ctx.attributes.set(v.id, { type: wgslType(v.shaderType), slot: v.slot });
       }
-      return { decls: [], body: [], expr: v.slot };
+      return { decls: [], body: [], expr: ctx.shaderStage === "vertex" ? `input.${v.slot}` : v.slot };
     }
 
     case "varying": {
@@ -1487,9 +1487,20 @@ function binaryWGSL(
 ): { decls: string[]; body: string[]; expr: string } {
   let lhs = compileWGSLStage(node.params![0], ctx);
   let rhs = compileWGSLStage(node.params![1], ctx);
+  let lhsType = (node.params![0] as any)?._t || "float";
+  let rhsType = (node.params![1] as any)?._t || "float";
+  let rhsExpr = rhs.expr;
+  let lhsExpr = lhs.expr;
+  if (lhsType !== rhsType) {
+    if (lhsType === "float" && (rhsType === "int" || rhsType === "uint")) {
+      rhsExpr = `f32(${rhs.expr})`;
+    } else if ((lhsType === "int" || lhsType === "uint") && rhsType === "float") {
+      rhsExpr = `i32(${rhs.expr})`;
+    }
+  }
   let expr = isFn
-    ? `${op}(${lhs.expr}, ${rhs.expr})`
-    : `(${lhs.expr} ${op} ${rhs.expr})`;
+    ? `${op}(${lhsExpr}, ${rhsExpr})`
+    : `(${lhsExpr} ${op} ${rhsExpr})`;
   return {
     decls: [...lhs.decls, ...rhs.decls],
     body: [...lhs.body, ...rhs.body],
@@ -1536,26 +1547,38 @@ function compileWGSLWithStage(
   }
 
   let lines: string[] = [];
-  let bindingId = 0;
+  let ubBinding = 0;
+  let texBinding = 0;
+  let samplerBinding = 0;
   ctx.uniforms.forEach((info) => {
     if (info.type === "texture_2d<f32>" || info.type === "texture_cube<f32>") {
-      lines.push(`@group(0) @binding(${bindingId++}) var ${info.slot}: ${info.type};`);
+      lines.push(`@group(1) @binding(${texBinding++}) var ${info.slot}: ${info.type};`);
     } else {
-      lines.push(`@group(0) @binding(${bindingId++}) var<uniform> ${info.slot}: ${info.type};`);
+      lines.push(`@group(0) @binding(${ubBinding++}) var<uniform> ${info.slot}: ${info.type};`);
     }
   });
   ctx.wgslSamplers.forEach((info) => {
-    lines.push(`@group(0) @binding(${bindingId++}) var ${info.samplerSlot}: sampler;`);
+    lines.push(`@group(2) @binding(${samplerBinding++}) var ${info.samplerSlot}: sampler;`);
   });
   if (ctx.uniforms.size > 0 || ctx.wgslSamplers.size > 0 || ctx.outputs.size > 0) {
     lines.push("");
   }
 
   if (shaderStage === "vertex") {
+    if (ctx.attributes.size > 0) {
+      lines.push("struct VertexInput {");
+      let attrLoc = 0;
+      ctx.attributes.forEach((info) => {
+        lines.push(`  @location(${attrLoc++}) ${info.slot}: ${info.type},`);
+      });
+      lines.push("};");
+      lines.push("");
+    }
     lines.push("struct VertexOutput {");
     lines.push("  @builtin(position) position: vec4<f32>,");
+    let varyingLoc = 0;
     ctx.varyings.forEach((info) => {
-      lines.push(`  @location(0) ${info.slot}: ${info.type},`);
+      lines.push(`  @location(${varyingLoc++}) ${info.slot}: ${info.type},`);
     });
     ctx.outputs.forEach((info) => {
       lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
@@ -1563,7 +1586,11 @@ function compileWGSLWithStage(
     lines.push("};");
     lines.push("");
     lines.push("@vertex");
-    lines.push("fn main() -> VertexOutput {");
+    if (ctx.attributes.size > 0) {
+      lines.push("fn main(input: VertexInput) -> VertexOutput {");
+    } else {
+      lines.push("fn main() -> VertexOutput {");
+    }
     for (let line of allBody) {
       lines.push("  " + line);
     }
@@ -1588,10 +1615,7 @@ function compileWGSLWithStage(
     for (let line of allBody) {
       lines.push("  " + line);
     }
-    if (ctx.outputs.size > 0) {
-      let firstOutput = ctx.outputs.values().next().value;
-      lines.push(`  return FragmentOutput(${lastExpr});`);
-    } else if (lastExpr !== "0.0") {
+    if (lastExpr !== "0.0") {
       lines.push(`  return FragmentOutput(${lastExpr});`);
     } else {
       lines.push("  return FragmentOutput();");
