@@ -1,5 +1,7 @@
 # RMSL (Random Mesh Shading Language)
 
+[![npm version](https://badge.fury.io/js/%40random-mesh%2Frmsl.svg)](https://www.npmjs.com/package/@random-mesh/rmsl)
+
 A TypeScript DSL for building shader programs. Define a node graph in TypeScript and compile it to **GLSL** (WebGL 2) or **WGSL** (WebGPU).
 
 ```typescript
