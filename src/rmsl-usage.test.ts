@@ -5,6 +5,7 @@ import {
   If, For, While, discard, break_, continue_,
   uniform, attribute, varying, output, builtinPosition, builtinFragDepth,
   compileGLSL, compileWGSL,
+  isUniformNode, isAttributeNode, isVaryingNode,
 } from "./rmsl";
 
 describe("RMSL", () => {
@@ -37,6 +38,48 @@ describe("RMSL", () => {
     let glsl = compileGLSL(prog());
     expect(glsl).toContain("uniform float");
     expect(glsl).toContain("uniform vec3");
+  });
+
+  it("uniform nodes have .name property", () => {
+    let uTime = uniform("float");
+    let uColor = uniform("vec3");
+    let uMVP = uniform("mat4");
+    expect(uTime.name).toMatch(/^_rmsl_u\d+$/);
+    expect(uColor.name).toMatch(/^_rmsl_u\d+$/);
+    expect(uMVP.name).toMatch(/^_rmsl_u\d+$/);
+  });
+
+  it("attribute nodes have .name property", () => {
+    let pos = attribute("vec3");
+    let tex = attribute("vec2");
+    expect(pos.name).toBe("_rmsl_a0");
+    expect(tex.name).toBe("_rmsl_a1");
+  });
+
+  it("varying nodes have .name property", () => {
+    let v = varying("vec3");
+    expect(v.name).toBe("_rmsl_v0");
+  });
+
+  it("type guards work for uniform nodes", () => {
+    let u = uniform("float");
+    expect(isUniformNode(u)).toBe(true);
+    expect(isAttributeNode(u)).toBe(false);
+    expect(isVaryingNode(u)).toBe(false);
+  });
+
+  it("type guards work for attribute nodes", () => {
+    let a = attribute("vec3");
+    expect(isAttributeNode(a)).toBe(true);
+    expect(isUniformNode(a)).toBe(false);
+    expect(isVaryingNode(a)).toBe(false);
+  });
+
+  it("type guards work for varying nodes", () => {
+    let v = varying("vec3");
+    expect(isVaryingNode(v)).toBe(true);
+    expect(isUniformNode(v)).toBe(false);
+    expect(isAttributeNode(v)).toBe(false);
   });
 
   it("compiles vec3 swizzles in GLSL", () => {

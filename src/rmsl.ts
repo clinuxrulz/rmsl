@@ -22,6 +22,12 @@ export type Mat3Like = number[] | BaseNode<"mat3">;
 export type Mat4Like = number[] | BaseNode<"mat4">;
 export type Sampler2DLike = BaseNode<"sampler2D"> | Node<"sampler2D">;
 
+// === Typed node types with variable name access ===
+export type VariableNode<A extends ShaderType> = BaseNode<A> & { name: string };
+export type UniformNode<A extends ShaderType> = VariableNode<A>;
+export type AttributeNode<A extends ShaderType> = VariableNode<A>;
+export type VaryingNode<A extends ShaderType> = VariableNode<A>;
+
 // === BaseNode ===
 export interface BaseNode<A extends ShaderType> {
   [__brand]: A;
@@ -29,6 +35,28 @@ export interface BaseNode<A extends ShaderType> {
   type: string;
   params?: BaseNode<ShaderType>[];
   value?: unknown;
+}
+
+// === Typed node types with variable name access ===
+export interface VariableNode<A extends ShaderType> extends BaseNode<A> {
+  name: string;
+}
+
+export interface UniformNode<A extends ShaderType> extends VariableNode<A> {}
+export interface AttributeNode<A extends ShaderType> extends VariableNode<A> {}
+export interface VaryingNode<A extends ShaderType> extends VariableNode<A> {}
+
+// === Type guards for node type checking ===
+export function isUniformNode<T extends ShaderType>(node: Node<T> | VariableNode<T>): node is UniformNode<T> {
+  return node.type === "uniform" && "name" in node;
+}
+
+export function isAttributeNode<T extends ShaderType>(node: Node<T> | VariableNode<T>): node is AttributeNode<T> {
+  return node.type === "attribute" && "name" in node;
+}
+
+export function isVaryingNode<T extends ShaderType>(node: Node<T> | VariableNode<T>): node is VaryingNode<T> {
+  return node.type === "varying" && "name" in node;
 }
 
 // === Per-type swizzle sets ===
@@ -357,7 +385,11 @@ function node<A extends ShaderType>(config: {
   params?: BaseNode<ShaderType>[];
   value?: unknown;
 }): Node<A> {
-  return new Node<A>({ _t: config._t ?? config.type, ...config } as any);
+  let result = new Node<A>({ _t: config._t ?? config.type, ...config } as any);
+  if (config.name !== undefined) {
+    (result as any).name = config.name;
+  }
+  return result;
 }
 
 function var_<A extends ShaderType>(varName: string, brandType: string): Node<A> {
@@ -652,31 +684,34 @@ let nextUniformId = 0;
 let nextAttrId = 0;
 let nextVaryingId = 0;
 
-export function uniform<T extends ShaderType>(shaderType: T): Node<T> {
+export function uniform<T extends ShaderType>(shaderType: T): UniformNode<T> {
   let id = nextUniformId++;
   return node({
     _t: shaderType,
     type: "uniform",
     value: { id, slot: `_rmsl_u${id}`, shaderType },
-  }) as Node<T>;
+    name: `_rmsl_u${id}`,
+  });
 }
 
-export function attribute<T extends ShaderType>(shaderType: T): Node<T> {
+export function attribute<T extends ShaderType>(shaderType: T): AttributeNode<T> {
   let id = nextAttrId++;
   return node({
     _t: shaderType,
     type: "attribute",
     value: { id, slot: `_rmsl_a${id}`, shaderType },
-  }) as Node<T>;
+    name: `_rmsl_a${id}`,
+  });
 }
 
-export function varying<T extends ShaderType>(shaderType: T): Node<T> {
+export function varying<T extends ShaderType>(shaderType: T): VaryingNode<T> {
   let id = nextVaryingId++;
   return node({
     _t: shaderType,
     type: "varying",
     value: { id, slot: `_rmsl_v${id}`, shaderType },
-  }) as Node<T>;
+    name: `_rmsl_v${id}`,
+  });
 }
 
 // === Outputs ===
