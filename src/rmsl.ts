@@ -82,6 +82,7 @@ interface FloatMathOps<A extends ShaderType> {
   min(other: FloatLike): Node<A>;
   max(other: FloatLike): Node<A>;
   mod(other: FloatLike): Node<A>;
+  mix(b: Node<A>, t: FloatLike): Node<A>;
   lessThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
   greaterThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
   lessThanEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
