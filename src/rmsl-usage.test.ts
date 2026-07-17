@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
-  Fn, float, vec2, vec3, vec4, int, boolean, mat3, mat4,
-  If, For,
+  Fn, float, vec2, vec3, vec4, int, boolean,
+  mat2, mat2x3, mat2x4, mat3, mat3x2, mat3x4, mat4, mat4x2, mat4x3,
+  If, For, break_, continue_,
   uniform, attribute, varying, output, builtinPosition,
   compileGLSL, compileWGSL,
 } from "./rmsl";
@@ -353,5 +354,72 @@ describe("RMSL", () => {
     let prog = Fn(() => float(5).mod(2).toVar());
     let wgsl = compileWGSL(prog());
     expect(wgsl).toContain("f32(");
+  });
+
+  // === Phase 5: Node System Gaps ===
+  it("swizzle write via assign works in GLSL", () => {
+    let prog = Fn(() => {
+      let a = vec3(1, 2, 3).toVar();
+      let b = vec3(4, 5, 6).toVar();
+      a.xy.assign(b.xy);
+      return a;
+    });
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain(".xy = ");
+  });
+
+  it("swizzle write via assign works in WGSL", () => {
+    let prog = Fn(() => {
+      let a = vec3(1, 2, 3).toVar();
+      let b = vec3(4, 5, 6).toVar();
+      a.xy.assign(b.xy);
+      return a;
+    });
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).toContain(".xy = ");
+  });
+
+  it("break_ compiles in GLSL", () => {
+    let prog = Fn(() => {
+      For(
+        () => { let i = int(0).toVar(); },
+        () => int(0).lessThan(int(10)),
+        () => {},
+        () => {
+          break_();
+        },
+      );
+      return float(1.0);
+    });
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain("break;");
+  });
+
+  it("continue_ compiles in WGSL", () => {
+    let prog = Fn(() => {
+      For(
+        () => { let i = int(0).toVar(); },
+        () => int(0).lessThan(int(10)),
+        () => {},
+        () => {
+          continue_();
+        },
+      );
+      return float(1.0);
+    });
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).toContain("continue;");
+  });
+
+  it("mat2 constructor compiles to GLSL", () => {
+    let prog = Fn(() => mat2(1, 0, 0, 1).toVar());
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain("mat2(1, 0, 0, 1)");
+  });
+
+  it("mat2x3 constructor compiles to GLSL", () => {
+    let prog = Fn(() => mat2x3(1,0,0,0,1,0).toVar());
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain("mat2x3(");
   });
 });

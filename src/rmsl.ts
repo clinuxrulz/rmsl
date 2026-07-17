@@ -4,7 +4,9 @@ const __brand = Symbol();
 export type ShaderType =
   | "float" | "vec2" | "vec3" | "vec4"
   | "int" | "uint" | "bool"
-  | "mat3" | "mat4"
+  | "mat2" | "mat2x3" | "mat2x4"
+  | "mat3x2" | "mat3" | "mat3x4"
+  | "mat4x2" | "mat4x3" | "mat4"
   | "sampler2D" | "samplerCube"
   | "void";
 
@@ -540,6 +542,24 @@ export function int(v: number | Node<"float">): Node<"int"> {
 export function boolean(v: boolean): Node<"bool"> {
   return node({ _t: "bool", type: "bool", value: v }) as Node<"bool">;
 }
+function makeMatConstructor<T extends ShaderType>(t: T, size: number, defaultVal: number[]): (...args: any[]) => Node<T> {
+  return (...args: any[]): Node<T> => {
+    if (args.length === 1 && isNode(args[0])) {
+      return node({ _t: t, type: "construct", params: [args[0] as BaseNode<ShaderType>] }) as Node<T>;
+    }
+    if (args.length === 1 && typeof args[0] === "number") {
+      return node({ _t: t, type: "construct", params: [wrapValue(args[0])] }) as Node<T>;
+    }
+    if (args.length === 0) {
+      return node({ _t: t, type: t, value: defaultVal }) as Node<T>;
+    }
+    return node({ _t: t, type: t, value: args }) as Node<T>;
+  };
+}
+export const mat2 = makeMatConstructor("mat2", 4, [1,0,0,1]);
+export const mat2x3 = makeMatConstructor("mat2x3", 6, [1,0,0,0,1,0]);
+export const mat2x4 = makeMatConstructor("mat2x4", 8, [1,0,0,0,0,1,0,0]);
+export const mat3x2 = makeMatConstructor("mat3x2", 6, [1,0,0,0,1,0]);
 export function mat3(...args: any[]): Node<"mat3"> {
   if (args.length === 1 && isNode(args[0])) {
     return node({ _t: "mat3", type: "construct", params: [args[0] as BaseNode<ShaderType>] }) as Node<"mat3">;
@@ -555,6 +575,9 @@ export function mat3(...args: any[]): Node<"mat3"> {
   }
   return node({ _t: "mat3", type: "mat3", value: args }) as Node<"mat3">;
 }
+export const mat3x4 = makeMatConstructor("mat3x4", 12, [1,0,0,0,0,1,0,0,0,0,1,0]);
+export const mat4x2 = makeMatConstructor("mat4x2", 8, [1,0,0,0,0,1,0,0]);
+export const mat4x3 = makeMatConstructor("mat4x3", 12, [1,0,0,0,0,1,0,0,0,0,1,0]);
 export function mat4(...args: any[]): Node<"mat4"> {
   if (args.length === 1 && isNode(args[0])) {
     return node({ _t: "mat4", type: "construct", params: [args[0] as BaseNode<ShaderType>] }) as Node<"mat4">;
@@ -698,6 +721,18 @@ export function discard(): void {
   });
 }
 
+export function break_(): void {
+  assertBlockScope("break", (scope) => {
+    scope.push(node({ _t: "void", type: "break" }));
+  });
+}
+
+export function continue_(): void {
+  assertBlockScope("continue", (scope) => {
+    scope.push(node({ _t: "void", type: "continue" }));
+  });
+}
+
 // ==== COMPILERS ====
 
 // ========== GLSL Compiler ==========
@@ -716,7 +751,9 @@ interface CompileCtx {
 let typeToGLSL: Record<string, string> = {
   float: "float", vec2: "vec2", vec3: "vec3", vec4: "vec4",
   int: "int", uint: "uint", bool: "bool",
-  mat3: "mat3", mat4: "mat4",
+  mat2: "mat2", mat2x3: "mat2x3", mat2x4: "mat2x4",
+  mat3x2: "mat3x2", mat3: "mat3", mat3x4: "mat3x4",
+  mat4x2: "mat4x2", mat4x3: "mat4x3", mat4: "mat4",
   sampler2D: "sampler2D", samplerCube: "samplerCube",
   void: "void",
 };
@@ -750,7 +787,14 @@ function compileGLSLStage(
     case "vec2": return { decls: [], body: [], expr: `vec2(${(node.value as number[]).join(", ")})` };
     case "vec3": return { decls: [], body: [], expr: `vec3(${(node.value as number[]).join(", ")})` };
     case "vec4": return { decls: [], body: [], expr: `vec4(${(node.value as number[]).join(", ")})` };
+    case "mat2": return { decls: [], body: [], expr: `mat2(${(node.value as number[]).join(", ")})` };
+    case "mat2x3": return { decls: [], body: [], expr: `mat2x3(${(node.value as number[]).join(", ")})` };
+    case "mat2x4": return { decls: [], body: [], expr: `mat2x4(${(node.value as number[]).join(", ")})` };
+    case "mat3x2": return { decls: [], body: [], expr: `mat3x2(${(node.value as number[]).join(", ")})` };
     case "mat3": return { decls: [], body: [], expr: `mat3(${(node.value as number[]).join(", ")})` };
+    case "mat3x4": return { decls: [], body: [], expr: `mat3x4(${(node.value as number[]).join(", ")})` };
+    case "mat4x2": return { decls: [], body: [], expr: `mat4x2(${(node.value as number[]).join(", ")})` };
+    case "mat4x3": return { decls: [], body: [], expr: `mat4x3(${(node.value as number[]).join(", ")})` };
     case "mat4": return { decls: [], body: [], expr: `mat4(${(node.value as number[]).join(", ")})` };
     case "void": return { decls: [], body: [], expr: "0.0" };
 
@@ -1015,6 +1059,14 @@ function compileGLSLStage(
       return { decls: [], body: ["discard;"], expr: "0.0" };
     }
 
+    case "break": {
+      return { decls: [], body: ["break;"], expr: "0.0" };
+    }
+
+    case "continue": {
+      return { decls: [], body: ["continue;"], expr: "0.0" };
+    }
+
     default:
       return { decls: [], body: [], expr: "0.0" };
   }
@@ -1159,7 +1211,9 @@ export const compileGLSL: {
 let typeToWGSL: Record<string, string> = {
   float: "f32", vec2: "vec2<f32>", vec3: "vec3<f32>", vec4: "vec4<f32>",
   int: "i32", uint: "u32", bool: "bool",
-  mat3: "mat3x3<f32>", mat4: "mat4x4<f32>",
+  mat2: "mat2x2<f32>", mat2x3: "mat2x3<f32>", mat2x4: "mat2x4<f32>",
+  mat3x2: "mat3x2<f32>", mat3: "mat3x3<f32>", mat3x4: "mat3x4<f32>",
+  mat4x2: "mat4x2<f32>", mat4x3: "mat4x3<f32>", mat4: "mat4x4<f32>",
   sampler2D: "texture_2d<f32>", samplerCube: "texture_cube<f32>",
   void: "void",
 };
@@ -1193,7 +1247,14 @@ function compileWGSLStage(
     case "vec2": return { decls: [], body: [], expr: `vec2<f32>(${(node.value as number[]).join(", ")})` };
     case "vec3": return { decls: [], body: [], expr: `vec3<f32>(${(node.value as number[]).join(", ")})` };
     case "vec4": return { decls: [], body: [], expr: `vec4<f32>(${(node.value as number[]).join(", ")})` };
+    case "mat2": return { decls: [], body: [], expr: `mat2x2<f32>(${(node.value as number[]).join(", ")})` };
+    case "mat2x3": return { decls: [], body: [], expr: `mat2x3<f32>(${(node.value as number[]).join(", ")})` };
+    case "mat2x4": return { decls: [], body: [], expr: `mat2x4<f32>(${(node.value as number[]).join(", ")})` };
+    case "mat3x2": return { decls: [], body: [], expr: `mat3x2<f32>(${(node.value as number[]).join(", ")})` };
     case "mat3": return { decls: [], body: [], expr: `mat3x3<f32>(${(node.value as number[]).join(", ")})` };
+    case "mat3x4": return { decls: [], body: [], expr: `mat3x4<f32>(${(node.value as number[]).join(", ")})` };
+    case "mat4x2": return { decls: [], body: [], expr: `mat4x2<f32>(${(node.value as number[]).join(", ")})` };
+    case "mat4x3": return { decls: [], body: [], expr: `mat4x3<f32>(${(node.value as number[]).join(", ")})` };
     case "mat4": return { decls: [], body: [], expr: `mat4x4<f32>(${(node.value as number[]).join(", ")})` };
     case "void": return { decls: [], body: [], expr: "0.0" };
 
@@ -1472,6 +1533,14 @@ function compileWGSLStage(
 
     case "discard": {
       return { decls: [], body: ["discard;"], expr: "0.0" };
+    }
+
+    case "break": {
+      return { decls: [], body: ["break;"], expr: "0.0" };
+    }
+
+    case "continue": {
+      return { decls: [], body: ["continue;"], expr: "0.0" };
     }
 
     default:
