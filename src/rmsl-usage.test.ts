@@ -314,10 +314,10 @@ describe("RMSL", () => {
   it("For loop init hoists declaration into for header in GLSL", () => {
     let prog = Fn(() => {
       For(
-        () => { let i = int(0).toVar(); },
-        () => int(0).lessThan(int(10)),
-        () => {},
-        () => {},
+        () => int(0).toVar(),
+        (i) => i.lessThan(int(10)),
+        (i) => {},
+        (i) => {},
       );
       return float(1.0);
     });
@@ -385,10 +385,10 @@ describe("RMSL", () => {
   it("break_ compiles in GLSL", () => {
     let prog = Fn(() => {
       For(
-        () => { let i = int(0).toVar(); },
-        () => int(0).lessThan(int(10)),
-        () => {},
-        () => {
+        () => int(0).toVar(),
+        (i) => i.lessThan(int(10)),
+        (i) => {},
+        (i) => {
           break_();
         },
       );
@@ -401,10 +401,10 @@ describe("RMSL", () => {
   it("continue_ compiles in WGSL", () => {
     let prog = Fn(() => {
       For(
-        () => { let i = int(0).toVar(); },
-        () => int(0).lessThan(int(10)),
-        () => {},
-        () => {
+        () => int(0).toVar(),
+        (i) => i.lessThan(int(10)),
+        (i) => {},
+        (i) => {
           continue_();
         },
       );

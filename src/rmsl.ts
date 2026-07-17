@@ -684,17 +684,26 @@ export function If(cond: BooleanLike, body: () => void): ElseIfChain {
   return chain;
 }
 
-export function For(
-  init: () => void,
-  cond: () => BooleanLike,
-  update: () => void,
-  body: () => void,
+export function For<T extends Node<ShaderType>>(
+  init: () => T,
+  cond: (v: T) => BooleanLike,
+  update: (v: T) => void,
+  body: (v: T) => void,
 ): void {
   assertBlockScope("For", (scope) => {
-    let initNode = buildBlock(init);
-    let condNode = wrapValue(cond()) as BaseNode<ShaderType>;
-    let updateNode = buildBlock(update);
-    let bodyNode = buildBlock(body);
+    let oldBlockScope = blockScope;
+    let initScope: BaseNode<ShaderType>[] = [];
+    blockScope = initScope;
+    let v: T;
+    try {
+      v = init();
+    } finally {
+      blockScope = oldBlockScope;
+    }
+    let initNode = node({ _t: "void", type: "seq", params: [...initScope] }) as Node<"void">;
+    let condNode = wrapValue(cond(v)) as BaseNode<ShaderType>;
+    let updateNode = buildBlock(() => update(v));
+    let bodyNode = buildBlock(() => body(v));
     scope.push(node({
       _t: "void",
       type: "for",
