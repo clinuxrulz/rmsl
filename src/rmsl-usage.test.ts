@@ -109,7 +109,7 @@ describe("RMSL", () => {
   it("compiles float lessThan to GLSL", () => {
     let prog = Fn(() => float(1.0).lessThan(float(2.0)).toVar());
     let glsl = compileGLSL(prog());
-    expect(glsl).toContain("(1 < 2)");
+    expect(glsl).toContain("(1.0 < 2.0)");
   });
 
   it("compiles float lessThan to WGSL", () => {
@@ -517,9 +517,9 @@ describe("RMSL", () => {
     expect(glsl_mix).not.toContain("mix(vec3(1, 0, 0), vec3(0, 1, 0))");
     let glsl_clamp = compileGLSL(Fn(() => float(0.5).clamp(float(0), float(1)).toVar())());
     expect(glsl_clamp).toContain("clamp(");
-    expect(glsl_clamp).toContain("0, 1");
+    expect(glsl_clamp).toContain("0.0, 1.0");
     let glsl_ss = compileGLSL(Fn(() => float(0.5).smoothstep(float(0), float(1)).toVar())());
-    expect(glsl_ss).toMatch(/smoothstep\(0, 1, 0\.5/);
+    expect(glsl_ss).toMatch(/smoothstep\(0\.0, 1\.0, 0\.5/);
   });
 
   it("Fn return type is not void for float expression", () => {

@@ -904,7 +904,11 @@ function compileGLSLStage(
   if (folded) node = folded;
 
   switch (node.type) {
-    case "float": return { decls: [], body: [], expr: String(node.value) };
+    case "float": {
+      let s = String(node.value);
+      if (!s.includes('.') && !s.includes('e')) s += '.0';
+      return { decls: [], body: [], expr: s };
+    }
     case "int": return { decls: [], body: [], expr: String(node.value) };
     case "uint": return { decls: [], body: [], expr: String(node.value) + "u" };
     case "bool": return { decls: [], body: [], expr: node.value ? "true" : "false" };
@@ -1099,10 +1103,15 @@ function compileGLSLStage(
       let lhs = compileGLSLStage(node.params![0], ctx);
       let rhs = compileGLSLStage(node.params![1], ctx);
       let vt = (node.params![0] as any)._t || "float";
+      let rhsType = (node.params![1] as any)?._t || "float";
       let t = glslType(vt);
+      let rhsExpr = rhs.expr;
+      if (vt === "float" && (rhsType === "int" || rhsType === "uint")) {
+        rhsExpr = `float(${rhsExpr})`;
+      }
       return {
         decls: [...lhs.decls, ...rhs.decls],
-        body: [...lhs.body, ...rhs.body, `${t} ${lhs.expr} = ${rhs.expr};`],
+        body: [...lhs.body, ...rhs.body, `${t} ${lhs.expr} = ${rhsExpr};`],
         expr: lhs.expr,
       };
     }
@@ -1223,9 +1232,18 @@ function binaryGLSL(
 ): { decls: string[]; body: string[]; expr: string } {
   let lhs = compileGLSLStage(node.params![0], ctx);
   let rhs = compileGLSLStage(node.params![1], ctx);
+  let lhsType = (node.params![0] as any)?._t || "float";
+  let rhsType = (node.params![1] as any)?._t || "float";
+  let lhsExpr = lhs.expr;
+  let rhsExpr = rhs.expr;
+  if (lhsType === "float" && (rhsType === "int" || rhsType === "uint")) {
+    rhsExpr = `float(${rhsExpr})`;
+  } else if ((lhsType === "int" || lhsType === "uint") && rhsType === "float") {
+    lhsExpr = `float(${lhsExpr})`;
+  }
   let expr = isFn
-    ? `${op}(${lhs.expr}, ${rhs.expr})`
-    : `(${lhs.expr} ${op} ${rhs.expr})`;
+    ? `${op}(${lhsExpr}, ${rhsExpr})`
+    : `(${lhsExpr} ${op} ${rhsExpr})`;
   return {
     decls: [...lhs.decls, ...rhs.decls],
     body: [...lhs.body, ...rhs.body],
@@ -1241,9 +1259,17 @@ function comparisonGLSL(
 ): { decls: string[]; body: string[]; expr: string } {
   let a = compileGLSLStage(node.params![0], ctx);
   let b = compileGLSLStage(node.params![1], ctx);
-  let type = (node.params![0] as any)?._t || "float";
-  let isVec = type === "vec2" || type === "vec3" || type === "vec4";
-  let expr = isVec ? `${fnName}(${a.expr}, ${b.expr})` : `(${a.expr} ${op} ${b.expr})`;
+  let lhsType = (node.params![0] as any)?._t || "float";
+  let rhsType = (node.params![1] as any)?._t || "float";
+  let isVec = lhsType === "vec2" || lhsType === "vec3" || lhsType === "vec4";
+  let lhsExpr = a.expr;
+  let rhsExpr = b.expr;
+  if (!isVec && lhsType === "float" && (rhsType === "int" || rhsType === "uint")) {
+    rhsExpr = `float(${rhsExpr})`;
+  } else if (!isVec && (lhsType === "int" || lhsType === "uint") && rhsType === "float") {
+    lhsExpr = `float(${lhsExpr})`;
+  }
+  let expr = isVec ? `${fnName}(${lhsExpr}, ${rhsExpr})` : `(${lhsExpr} ${op} ${rhsExpr})`;
   return {
     decls: [...a.decls, ...b.decls],
     body: [...a.body, ...b.body],
@@ -1259,10 +1285,23 @@ function ternaryGLSL(
   let a = compileGLSLStage(node.params![0], ctx);
   let b = compileGLSLStage(node.params![1], ctx);
   let c = compileGLSLStage(node.params![2], ctx);
+  let aType = (node.params![0] as any)?._t || "float";
+  let bType = (node.params![1] as any)?._t || "float";
+  let cType = (node.params![2] as any)?._t || "float";
+  let aExpr = a.expr;
+  let bExpr = b.expr;
+  let cExpr = c.expr;
+  if (aType === "float") {
+    if (bType === "int" || bType === "uint") bExpr = `float(${bExpr})`;
+    if (cType === "int" || cType === "uint") cExpr = `float(${cExpr})`;
+  } else if (aType === "int" || aType === "uint") {
+    if (bType === "float") aExpr = `float(${aExpr})`;
+    if (cType === "float") { /* keep as-is or convert both */ }
+  }
   return {
     decls: [...a.decls, ...b.decls, ...c.decls],
     body: [...a.body, ...b.body, ...c.body],
-    expr: `${fn}(${a.expr}, ${b.expr}, ${c.expr})`,
+    expr: `${fn}(${aExpr}, ${bExpr}, ${cExpr})`,
   };
 }
 
@@ -1768,10 +1807,20 @@ function ternaryWGSL(
   let a = compileWGSLStage(node.params![0], ctx);
   let b = compileWGSLStage(node.params![1], ctx);
   let c = compileWGSLStage(node.params![2], ctx);
+  let aType = (node.params![0] as any)?._t || "float";
+  let bType = (node.params![1] as any)?._t || "float";
+  let cType = (node.params![2] as any)?._t || "float";
+  let aExpr = a.expr;
+  let bExpr = b.expr;
+  let cExpr = c.expr;
+  if (aType === "float") {
+    if (bType === "int" || bType === "uint") bExpr = `f32(${bExpr})`;
+    if (cType === "int" || cType === "uint") cExpr = `f32(${cExpr})`;
+  }
   return {
     decls: [...a.decls, ...b.decls, ...c.decls],
     body: [...a.body, ...b.body, ...c.body],
-    expr: `${fn}(${a.expr}, ${b.expr}, ${c.expr})`,
+    expr: `${fn}(${aExpr}, ${bExpr}, ${cExpr})`,
   };
 }
 
