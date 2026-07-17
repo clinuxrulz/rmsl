@@ -23,10 +23,13 @@ export type Mat4Like = number[] | BaseNode<"mat4">;
 export type Sampler2DLike = BaseNode<"sampler2D"> | Node<"sampler2D">;
 
 // === Typed node types with variable name access ===
-export type VariableNode<A extends ShaderType> = BaseNode<A> & { name: string };
-export type UniformNode<A extends ShaderType> = VariableNode<A>;
-export type AttributeNode<A extends ShaderType> = VariableNode<A>;
-export type VaryingNode<A extends ShaderType> = VariableNode<A>;
+export interface VariableNode<A extends ShaderType> extends BaseNode<A> {
+  name: string;
+}
+
+export interface UniformNode<A extends ShaderType> extends VariableNode<A> {}
+export interface AttributeNode<A extends ShaderType> extends VariableNode<A> {}
+export interface VaryingNode<A extends ShaderType> extends VariableNode<A> {}
 
 // === BaseNode ===
 export interface BaseNode<A extends ShaderType> {
@@ -384,6 +387,7 @@ function node<A extends ShaderType>(config: {
   type: string;
   params?: BaseNode<ShaderType>[];
   value?: unknown;
+  name?: string;
 }): Node<A> {
   let result = new Node<A>({ _t: config._t ?? config.type, ...config } as any);
   if (config.name !== undefined) {
@@ -686,32 +690,35 @@ let nextVaryingId = 0;
 
 export function uniform<T extends ShaderType>(shaderType: T): UniformNode<T> {
   let id = nextUniformId++;
-  return node({
+  const result = node({
     _t: shaderType,
     type: "uniform",
     value: { id, slot: `_rmsl_u${id}`, shaderType },
     name: `_rmsl_u${id}`,
   });
+  return result as unknown as UniformNode<T>;
 }
 
 export function attribute<T extends ShaderType>(shaderType: T): AttributeNode<T> {
   let id = nextAttrId++;
-  return node({
+  const result = node({
     _t: shaderType,
     type: "attribute",
     value: { id, slot: `_rmsl_a${id}`, shaderType },
     name: `_rmsl_a${id}`,
   });
+  return result as unknown as AttributeNode<T>;
 }
 
 export function varying<T extends ShaderType>(shaderType: T): VaryingNode<T> {
   let id = nextVaryingId++;
-  return node({
+  const result = node({
     _t: shaderType,
     type: "varying",
     value: { id, slot: `_rmsl_v${id}`, shaderType },
     name: `_rmsl_v${id}`,
   });
+  return result as unknown as VaryingNode<T>;
 }
 
 // === Outputs ===

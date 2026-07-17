@@ -15,7 +15,7 @@ export default defineConfig({
   },
   plugins: [
     dts({
-      include: ['src/**/*.ts'],
+      include: ['src/rmsl.ts'],
       outDir: 'dist',
       rollupTypes: true,
     }),
