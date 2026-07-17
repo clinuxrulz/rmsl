@@ -1,6 +1,7 @@
 # RMSL (Random Mesh Shading Language)
 
 [![npm version](https://badge.fury.io/js/%40random-mesh%2Frmsl.svg)](https://www.npmjs.com/package/@random-mesh/rmsl)
+[![GitHub Repo stars](https://img.shields.io/github/stars/clinuxrulz/rmsl?style=social)](https://github.com/clinuxrulz/rmsl)
 
 A TypeScript DSL for building shader programs. Define a node graph in TypeScript and compile it to **GLSL** (WebGL 2) or **WGSL** (WebGPU).
 
@@ -29,6 +30,11 @@ let wgsl = compileWGSL(prog());
 
 ## Documentation
 
-- [Getting Started](docs/getting-started.md) - Quick setup and hello world
-- [API Reference](docs/api.md) - Full type system, constructors, and operations
-- [Compilation](docs/compilation.md) - GLSL/WGSL output, type mappings, binding model
+- [Getting Started](https://github.com/clinuxrulz/rmsl/blob/main/docs/getting-started.md) - Quick setup and hello world
+- [API Reference](https://github.com/clinuxrulz/rmsl/blob/main/docs/api.md) - Full type system, constructors, and operations
+- [Compilation](https://github.com/clinuxrulz/rmsl/blob/main/docs/compilation.md) - GLSL/WGSL output, type mappings, binding model
+
+## Links
+
+- [GitHub Repository](https://github.com/clinuxrulz/rmsl)
+- [npm Package](https://www.npmjs.com/package/@random-mesh/rmsl)
