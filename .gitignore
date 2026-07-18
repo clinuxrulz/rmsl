@@ -31,3 +31,6 @@ Thumbs.db
 # reports/ is regenerated output.
 .stryker-tmp/
 reports/
+
+# Git worktrees (checkouts, not source)
+.worktrees/
