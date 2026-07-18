@@ -187,6 +187,42 @@ describe("RMSL", () => {
     expect(wgsl).toContain("refract(vec3<f32>(1, 0, 0), vec3<f32>(0, 1, 0), 0.5f)");
   });
 
+  // The update clause arrives as statements, so its work sits in `body` while
+  // `expr` holds only a bare variable reference. Emitting `expr` alone dropped
+  // the increment and produced `for (float i = 0.0; (i < 4.0); i)` — an
+  // infinite loop that hangs the GPU.
+  it("emits the for-loop update clause in GLSL", () => {
+    let prog = Fn(() => {
+      let total = float(0).toVar();
+      For(
+        () => float(0).toVar(),
+        (i) => i.lessThan(4),
+        (i) => i.assign(i.add(1)),
+        (i) => { total.assign(total.add(i)); },
+      );
+      return total;
+    });
+    let glsl = compileGLSL(prog());
+    let header = glsl.split("\n").find(l => l.includes("for ("))!;
+    expect(header).toMatch(/;\s*(\S+) = \(\1 \+ 1\.0\)\) \{$/);
+  });
+
+  it("emits the for-loop update clause in WGSL", () => {
+    let prog = Fn(() => {
+      let total = float(0).toVar();
+      For(
+        () => float(0).toVar(),
+        (i) => i.lessThan(4),
+        (i) => i.assign(i.add(1)),
+        (i) => { total.assign(total.add(i)); },
+      );
+      return total;
+    });
+    let wgsl = compileWGSL(prog());
+    let header = wgsl.split("\n").find(l => l.includes("for ("))!;
+    expect(header).toMatch(/;\s*(\S+) = \(\1 \+ 1f\)\) \{$/);
+  });
+
   // === Phase 1.2: Texture sampling ===
   it("compiles texture sampling to GLSL", () => {
     let prog = Fn(() => {

@@ -936,6 +936,26 @@ function mkNode(config: { _t?: string; type: string; params?: BaseNode<ShaderTyp
   return new NodeImpl({ _t: config._t ?? config.type, type: config.type, params: config.params, value: config.value }) as BaseNode<ShaderType>;
 }
 
+/**
+ * Render a for-loop's update clause.
+ *
+ * The clause is authored as statements — `(i) => i.assign(i.add(1))` — so it
+ * arrives with its work in `body` and only a bare variable reference in `expr`.
+ * Emitting `expr` alone drops the increment and produces an infinite loop.
+ *
+ * GLSL's update slot accepts a comma expression, so every statement survives.
+ * WGSL's grammar allows exactly one update statement, so callers there keep
+ * the last.
+ */
+function forUpdateExpr(
+  update: { body: string[]; expr: string },
+  form: "comma" | "single",
+): string {
+  if (update.body.length === 0) return update.expr;
+  let statements = update.body.map(s => s.endsWith(";") ? s.slice(0, -1) : s);
+  return form === "comma" ? statements.join(", ") : statements[statements.length - 1];
+}
+
 function compileGLSLStage(
   node: BaseNode<ShaderType> | ShaderType extends never ? never : any,
   ctx: CompileCtx,
@@ -1244,7 +1264,7 @@ function compileGLSLStage(
         body: [
           ...initBody,
           ...cond.body,
-          `for (${initExpr}; ${cond.expr}; ${update.expr}) {`,
+          `for (${initExpr}; ${cond.expr}; ${forUpdateExpr(update, "comma")}) {`,
           ...body.body.map(l => "  " + l),
           "}",
         ],
@@ -1805,7 +1825,7 @@ function compileWGSLStage(
         decls: [...init.decls, ...cd.decls, ...update.decls, ...body.decls],
         body: [
           ...initBody,
-          `for (${initExpr}; ${cd.expr}; ${update.expr}) {`,
+          `for (${initExpr}; ${cd.expr}; ${forUpdateExpr(update, "single")}) {`,
           ...body.body.map(l => "  " + l),
           "}",
         ],
