@@ -192,6 +192,7 @@ While(condition, () => {
 | Function | Returns | Description |
 |----------|---------|-------------|
 | `uniform(type)` | `UniformNode<T>` | Declares a uniform (constant buffer input). Use `.name` for the generated name (e.g., `_rmsl_u0`), `.node()` for method chaining. |
+| `uniformRaw(name, type)` | `UniformNode<T>` | Declares a uniform with a custom name/slot (e.g., `uniformRaw("uMVP", "mat4")` emits `uniform mat4 uMVP`). Use `.name` for the custom name, `.node()` for method chaining. |
 | `attribute(type)` | `AttributeNode<T>` | Declares a vertex attribute. Use `.name` for the generated name (e.g., `_rmsl_a0`), `.node()` for method chaining. |
 | `varying(type)` | `VaryingNode<T>` | Declares a varying (vertex→fragment interpolant). Use `.name` for the generated name (e.g., `_rmsl_v0`), `.node()` for method chaining. |
 | `output(type)` | `Node<T>` | Declares a fragment output with `@location(N)` |

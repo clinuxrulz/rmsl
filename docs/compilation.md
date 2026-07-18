@@ -151,6 +151,57 @@ struct VertexInput {
 | Textures | `@group(1)` | `@binding(N)` |
 | Samplers | `@group(2)` | `@binding(N)` |
 
+## Standalone Function Compilers
+
+For use with Three.js `glslFn`/`wgslFn` or other embedding scenarios, RMSL provides `compileGLSLFn` and `compileWGSLFn` to compile individual functions with custom names and parameters:
+
+```typescript
+import { compileGLSLFn, compileWGSLFn, float, var_ } from "rmsl";
+
+let glsl = compileGLSLFn(
+  (a, b) => a.add(b).sin(),
+  { name: "myFunc", params: [{ name: "a", type: "float" }, { name: "b", type: "float" }] },
+);
+```
+
+### GLSL output
+
+```glsl
+float myFunc(float a, float b) {
+  return sin((a + b));
+}
+```
+
+### WGSL output
+
+```wgsl
+fn myFunc(a: f32, b: f32) -> f32 {
+  return sin((a + b));
+}
+```
+
+Uniforms referenced inside the function body are declared automatically with their bindings:
+
+```typescript
+let glsl = compileGLSLFn(
+  (v) => {
+    let u = uniformRaw("uScale", "float");
+    return v.node().mult(u.node());
+  },
+  { name: "scale", params: [{ name: "v", type: "float" }] },
+);
+```
+
+Produces:
+
+```glsl
+uniform float uScale;
+
+float scale(float v) {
+  return (v * uScale);
+}
+```
+
 ## Type Mappings
 
 ### GLSL types

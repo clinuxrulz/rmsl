@@ -692,6 +692,17 @@ export function uniform<T extends ShaderType>(shaderType: T): UniformNode<T> {
   return result as unknown as UniformNode<T>;
 }
 
+export function uniformRaw<T extends ShaderType>(name: string, shaderType: T): UniformNode<T> {
+  let id = nextUniformId++;
+  const result = node({
+    _t: shaderType,
+    type: "uniform",
+    value: { id, slot: name, shaderType },
+    name: name,
+  });
+  return result as unknown as UniformNode<T>;
+}
+
 export function attribute<T extends ShaderType>(shaderType: T): AttributeNode<T> {
   let id = nextAttrId++;
   const result = node({
@@ -2029,3 +2040,113 @@ export const compileWGSL: {
     fragment: (root: Node<ShaderType> | Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
   },
 );
+
+// === Standalone function compilers (for Three.js glslFn/wgslFn embedding) ===
+
+export type CompileFnOptions = {
+  name: string;
+  params: Array<{ name: string; type: ShaderType }>;
+};
+
+function compileFnBody(
+  result: Node<any>,
+  params: Array<{ name: string; type: ShaderType }>,
+  name: string,
+  language: "glsl" | "wgsl",
+): string {
+  if (Array.isArray(result)) {
+    throw new Error(
+      "compileGLSLFn/compileWGSLFn does not support multi-return functions. "
+      + "Define separate functions for each return value.",
+    );
+  }
+
+  if (language === "glsl") {
+    const ctx: CompileCtx = {
+      nextId: 0,
+      shaderStage: "fragment",
+      uniforms: new Map(),
+      attributes: new Map(),
+      varyings: new Map(),
+      outputs: new Map(),
+      wgslSamplers: new Map(),
+      varDefs: new Map(),
+      inFn: false,
+      fragDepthUsed: false,
+    };
+    const compiled = compileGLSLStage(result, ctx);
+    const returnType = glslType((result as any)._t || "float");
+    const paramStr = params.map(p => `${glslType(p.type)} ${p.name}`).join(", ");
+    let code = "";
+    ctx.uniforms.forEach((info) => {
+      code += `uniform ${info.type} ${info.slot};\n`;
+    });
+    if (ctx.uniforms.size > 0) {
+      code += "\n";
+    }
+    code += `${returnType} ${name}(${paramStr}) {\n`;
+    for (const line of compiled.body) {
+      code += `  ${line}\n`;
+    }
+    if (compiled.expr !== "0.0") {
+      code += `  return ${compiled.expr};\n`;
+    } else {
+      code += `  return ${returnType}(0);\n`;
+    }
+    code += `}`;
+    return code;
+  } else {
+    const ctx: CompileCtx = {
+      nextId: 0,
+      shaderStage: "fragment",
+      uniforms: new Map(),
+      attributes: new Map(),
+      varyings: new Map(),
+      outputs: new Map(),
+      wgslSamplers: new Map(),
+      varDefs: new Map(),
+      inFn: false,
+      fragDepthUsed: false,
+    };
+    const compiled = compileWGSLStage(result, ctx);
+    const returnType = wgslType((result as any)._t || "float");
+    const paramStr = params.map(p => `${p.name}: ${wgslType(p.type)}`).join(", ");
+    let code = `fn ${name}(${paramStr}) -> ${returnType} {\n`;
+    for (const line of compiled.decls) {
+      code += `  ${line}\n`;
+    }
+    for (const line of compiled.body) {
+      code += `  ${line}\n`;
+    }
+    if (compiled.expr !== "0.0") {
+      code += `  return ${compiled.expr};\n`;
+    } else {
+      code += `  return ${returnType}();\n`;
+    }
+    code += `}\n`;
+    let ubBinding = 0;
+    let sortedUniforms = [...ctx.uniforms.entries()].sort((a, b) => a[1].slot.localeCompare(b[1].slot));
+    for (let [, info] of sortedUniforms) {
+      code += `@group(0) @binding(${ubBinding++}) var<uniform> ${info.slot}: ${info.type};\n`;
+    }
+    return code;
+  }
+}
+
+export function compileGLSLFn(
+  fn: (...args: any[]) => Node<any>,
+  options: CompileFnOptions,
+): string {
+  const paramNodes = options.params.map(p => var_(p.name, p.type));
+  const result = fn(...paramNodes);
+  return compileFnBody(result, options.params, options.name, "glsl");
+}
+
+export function compileWGSLFn(
+  fn: (...args: any[]) => Node<any>,
+  options: CompileFnOptions,
+): string {
+  const paramNodes = options.params.map(p => var_(p.name, p.type));
+  const result = fn(...paramNodes);
+  return compileFnBody(result, options.params, options.name, "wgsl");
+}
