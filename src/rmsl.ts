@@ -1316,8 +1316,11 @@ function compileGLSLStage(
     }
 
     default:
-      console.warn(`[RMSL] Unsupported node type in GLSL compiler: "${node.type}"`);
-      return { decls: [], body: [], expr: "0.0" };
+      // Emitting a placeholder here would silently corrupt the shader: an
+      // unhandled node becomes the literal 0.0 and the program still "compiles".
+      // Every node type the public API can build has a case above, so reaching
+      // this means the compiler lost one.
+      throw new Error(`[RMSL] Unsupported node type in GLSL compiler: "${node.type}"`);
   }
 }
 
@@ -1877,8 +1880,11 @@ function compileWGSLStage(
     }
 
     default:
-      console.warn(`[RMSL] Unsupported node type in WGSL compiler: "${node.type}"`);
-      return { decls: [], body: [], expr: "0.0" };
+      // Emitting a placeholder here would silently corrupt the shader: an
+      // unhandled node becomes the literal 0.0 and the program still "compiles".
+      // Every node type the public API can build has a case above, so reaching
+      // this means the compiler lost one.
+      throw new Error(`[RMSL] Unsupported node type in WGSL compiler: "${node.type}"`);
   }
 }
 

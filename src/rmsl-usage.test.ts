@@ -1,12 +1,27 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import {
   Fn, float, vec2, vec3, vec4, int, boolean,
   mat2, mat2x3, mat2x4, mat3, mat3x2, mat3x4, mat4, mat4x2, mat4x3,
   If, For, While, discard, break_, continue_,
   uniform, attribute, varying, output, builtinPosition, builtinFragDepth,
-  compileGLSL, compileWGSL,
+  compileGLSL as rawCompileGLSL, compileWGSL as rawCompileWGSL,
   isUniformNode, isAttributeNode, isVaryingNode,
 } from "./rmsl";
+import {
+  recordGLSL, recordWGSL, assertRecordedShadersValid,
+} from "./testing/shader-validity";
+
+// Every shader these tests generate is additionally compiled by a real GLSL and
+// WGSL implementation in the afterAll below. Aliasing here means the tests
+// themselves need no changes; see src/testing/shader-validity.ts for why
+// substring assertions alone were not enough.
+const compileGLSL = recordGLSL(rawCompileGLSL);
+const compileWGSL = recordWGSL(rawCompileWGSL);
+
+afterAll(async () => {
+  await assertRecordedShadersValid();
+}, 120_000);
+
 
 describe("RMSL", () => {
   it("compiles a simple float expression to GLSL", () => {
