@@ -13,6 +13,9 @@
     "typescript"
   ],
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "main": "./dist/rmsl.js",
   "types": "./dist/rmsl.d.ts",
   "exports": {
