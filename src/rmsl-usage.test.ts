@@ -173,6 +173,20 @@ describe("RMSL", () => {
     expect(glsl).toContain("equal(");
   });
 
+  // refract(I, N, eta) takes three arguments; routing it through the binary
+  // emitter silently dropped eta and produced a two-argument call.
+  it("compiles refract with all three arguments to GLSL", () => {
+    let prog = Fn(() => vec3(1,0,0).refract(vec3(0,1,0), 0.5).toVar());
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain("refract(vec3(1, 0, 0), vec3(0, 1, 0), 0.5)");
+  });
+
+  it("compiles refract with all three arguments to WGSL", () => {
+    let prog = Fn(() => vec3(1,0,0).refract(vec3(0,1,0), 0.5).toVar());
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).toContain("refract(vec3<f32>(1, 0, 0), vec3<f32>(0, 1, 0), 0.5f)");
+  });
+
   // === Phase 1.2: Texture sampling ===
   it("compiles texture sampling to GLSL", () => {
     let prog = Fn(() => {

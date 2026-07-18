@@ -1071,7 +1071,7 @@ function compileGLSLStage(
     case "cross": return binaryGLSL(node, ctx, "cross", true);
     case "distance": return binaryGLSL(node, ctx, "distance", true);
     case "reflect": return binaryGLSL(node, ctx, "reflect", true);
-    case "refract": return binaryGLSL(node, ctx, "refract", true);
+    case "refract": return ternaryGLSL(node, ctx, "refract");
     case "mix": return ternaryGLSL(node, ctx, "mix");
     case "step": return binaryGLSL(node, ctx, "step", true);
     case "smoothstep": return ternaryGLSL(node, ctx, "smoothstep");
@@ -1618,7 +1618,7 @@ function compileWGSLStage(
     case "cross": return binaryWGSL(node, ctx, "cross", true);
     case "distance": return binaryWGSL(node, ctx, "distance", true);
     case "reflect": return binaryWGSL(node, ctx, "reflect", true);
-    case "refract": return binaryWGSL(node, ctx, "refract", true);
+    case "refract": return ternaryWGSL(node, ctx, "refract");
     case "mix": return ternaryWGSL(node, ctx, "mix");
     case "step": return binaryWGSL(node, ctx, "step", true);
     case "smoothstep": return ternaryWGSL(node, ctx, "smoothstep");
