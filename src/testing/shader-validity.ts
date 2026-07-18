@@ -34,7 +34,7 @@ declare const process: { env: Record<string, string | undefined> };
 export type ShaderLang = "glsl" | "wgsl";
 export type ShaderStage = "vertex" | "fragment";
 
-interface Recorded {
+export interface Recorded {
   test: string;
   lang: ShaderLang;
   stage: ShaderStage;
@@ -160,13 +160,24 @@ async function validateGLSL(items: Recorded[]): Promise<(string | null)[]> {
       const gl = document.createElement("canvas").getContext("webgl2");
       if (!gl) throw new Error("WebGL2 unavailable in the validation browser");
       return list.map(({ src, stage }) => {
+        // Null is the only value meaning "valid" — see the note in
+        // validationReport. Every failure path below therefore has to produce a
+        // non-empty string, including the ones where the driver tells us
+        // nothing. A lost context makes createShader return null and every
+        // query after it return null too, which would otherwise read as a
+        // clean compile for this shader and every one after it.
+        if (gl.isContextLost()) {
+          throw new Error("WebGL2 context was lost during validation");
+        }
         const shader = gl.createShader(
           stage === "vertex" ? gl.VERTEX_SHADER : gl.FRAGMENT_SHADER,
-        )!;
+        );
+        if (!shader) return "could not create a shader object";
         gl.shaderSource(shader, src);
         gl.compileShader(shader);
         if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return null;
-        return (gl.getShaderInfoLog(shader) ?? "").trim().split("\n")[0];
+        const log = (gl.getShaderInfoLog(shader) ?? "").trim().split("\n")[0];
+        return log || "failed to compile, and the driver gave no message";
       });
     }, items.map(i => ({ src: i.src!, stage: i.stage })));
   } finally {
@@ -234,7 +245,48 @@ export async function assertRecordedShadersValid(): Promise<void> {
     validateWGSL(wgsl),
   ]);
 
-  const failed = new Map<string, string>();
+  const report = validationReport(recorded, glslErrors, wgslErrors);
+  if (report) throw new Error(report);
+}
+
+/**
+ * Turn a validation run into a report, or null when there is nothing to say.
+ *
+ * Kept separate from the GPU work so the reporting can be tested without a
+ * browser or a device — this is the part that decides whether a run passes, so
+ * a mistake here is invisible in exactly the way the harness exists to prevent.
+ */
+export function validationReport(
+  recorded: Recorded[],
+  glslErrors: (string | null)[],
+  wgslErrors: (string | null)[],
+  known: Record<string, string> = KNOWN_INVALID,
+): string | null {
+  // Nothing recorded means nothing was checked, which is not the same as
+  // everything being fine. A run filtered down to tests that compile nothing,
+  // or a test file that lost the aliased import, would otherwise finish green
+  // having verified none of the shaders it appears to cover.
+  if (recorded.length === 0) {
+    return "Validated no shaders at all. Either the run was filtered down to"
+      + " tests that compile nothing, or a test file is importing compileGLSL"
+      + " / compileWGSL directly instead of the recording stand-ins in"
+      + " src/testing/shader-validity.ts. Set RMSL_SKIP_SHADER_VALIDATION=1 if"
+      + " skipping validation is what you meant.";
+  }
+
+  const glsl = recorded.filter(r => r.lang === "glsl" && r.src !== null);
+  const wgsl = recorded.filter(r => r.lang === "wgsl" && r.src !== null);
+
+  // Every failing shader is kept, not just the last one per test. A single test
+  // routinely compiles dozens — the breadth tests loop over every builtin — and
+  // overwriting by test name reported one defect while hiding the rest.
+  const failed = new Map<string, string[]>();
+  const fail = (key: string, message: string) => {
+    const existing = failed.get(key);
+    if (existing) existing.push(message);
+    else failed.set(key, [message]);
+  };
+
   for (const entry of recorded) {
     if (!entry.compileError) continue;
     // Both backends refusing a program is consistent, and some tests assert
@@ -244,21 +296,22 @@ export async function assertRecordedShadersValid(): Promise<void> {
       r => r.pair === entry.pair && r.lang !== entry.lang,
     );
     if (counterpart?.compileError) continue;
-    failed.set(`${entry.lang}:${entry.test}`, `did not compile — ${entry.compileError}`);
+    fail(`${entry.lang}:${entry.test}`, `did not compile — ${entry.compileError}`);
   }
+  // Compared against null rather than tested for truthiness: an empty string is
+  // a failure whose driver said nothing, and treating it as valid is how a lost
+  // context could mark every remaining shader as fine.
   glsl.forEach((item, i) => {
-    const e = glslErrors[i];
-    if (e) failed.set(`glsl:${item.test}`, e);
+    if (glslErrors[i] != null) fail(`glsl:${item.test}`, glslErrors[i]!);
   });
   wgsl.forEach((item, i) => {
-    const e = wgslErrors[i];
-    if (e) failed.set(`wgsl:${item.test}`, e);
+    if (wgslErrors[i] != null) fail(`wgsl:${item.test}`, wgslErrors[i]!);
   });
 
-  const unexpected = [...failed].filter(([key]) => !(key in KNOWN_INVALID));
-  const fixed = Object.keys(KNOWN_INVALID).filter(key => !failed.has(key));
+  const unexpected = [...failed].filter(([key]) => !(key in known));
+  const fixed = Object.keys(known).filter(key => !failed.has(key));
 
-  if (unexpected.length === 0 && fixed.length === 0) return;
+  if (unexpected.length === 0 && fixed.length === 0) return null;
 
   const report: string[] = [
     `Validated ${recorded.length} generated shaders from`
@@ -267,9 +320,11 @@ export async function assertRecordedShadersValid(): Promise<void> {
   ];
 
   if (unexpected.length > 0) {
-    report.push("", `${unexpected.length} shader(s) newly invalid:`);
-    for (const [key, error] of unexpected) {
-      report.push(`  ${describe(key)}\n      ${error}`);
+    const count = unexpected.reduce((n, [, errors]) => n + errors.length, 0);
+    report.push("", `${count} shader(s) newly invalid:`);
+    for (const [key, errors] of unexpected) {
+      report.push(`  ${describe(key)}`);
+      for (const error of errors) report.push(`      ${error}`);
     }
   }
 
@@ -282,7 +337,7 @@ export async function assertRecordedShadersValid(): Promise<void> {
     for (const key of fixed) report.push(`  ${describe(key)}  [key: ${key}]`);
   }
 
-  throw new Error(report.join("\n"));
+  return report.join("\n");
 }
 
 /**
