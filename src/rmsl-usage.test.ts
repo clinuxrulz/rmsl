@@ -5,6 +5,7 @@ import {
   If, For, While, discard, break_, continue_,
   uniform, attribute, varying, output, builtinPosition, builtinFragDepth,
   isUniformNode, isAttributeNode, isVaryingNode,
+  compileGLSLFn, compileWGSLFn, uniformRaw,
 } from "./rmsl";
 // Recording stand-ins for the real compilers: each returns the language it is
 // named for and additionally compiles the program to the other, so every shader
@@ -14,6 +15,7 @@ import {
 import {
   recordingGLSL as compileGLSL,
   recordingWGSL as compileWGSL,
+  recordShaderSource,
   assertRecordedShadersValid,
 } from "./testing/shader-validity";
 
@@ -876,5 +878,65 @@ describe("RMSL", () => {
 
   it("If outside Fn throws", () => {
     expect(() => If(boolean(true), () => {})).toThrow("must be called inside");
+  });
+
+  // === Standalone function compilers ===
+  //
+  // compileGLSLFn/compileWGSLFn and uniformRaw were the only exported API with
+  // no test at all — the mutation run put 75 uncovered mutants in their shared
+  // body. They emit a function rather than a whole shader, so each result is
+  // embedded in a minimal shader and validated: the thing worth knowing is that
+  // what they produce compiles where it is meant to be used.
+
+  it("compileGLSLFn emits a named function with typed params", () => {
+    let glsl = compileGLSLFn((a: any, b: any) => a.add(b).sin(), {
+      name: "myFunc",
+      params: [{ name: "a", type: "float" }, { name: "b", type: "float" }],
+    });
+    expect(glsl).toContain("float myFunc(float a, float b)");
+    expect(glsl).toContain("return sin((a + b));");
+
+    recordShaderSource("glsl", "fragment", `#version 300 es
+precision highp float;
+layout(location=0) out vec4 outColor;
+${glsl}
+void main(void) { outColor = vec4(myFunc(1.0, 2.0)); }`);
+  });
+
+  it("compileWGSLFn emits a named function with typed params", () => {
+    let wgsl = compileWGSLFn((a: any, b: any) => a.add(b).sin(), {
+      name: "myFunc",
+      params: [{ name: "a", type: "float" }, { name: "b", type: "float" }],
+    });
+    expect(wgsl).toContain("fn myFunc(a: f32, b: f32) -> f32");
+    expect(wgsl).toContain("return sin((a + b));");
+
+    recordShaderSource("wgsl", "fragment", `${wgsl}
+@fragment fn main() -> @location(0) vec4<f32> {
+  return vec4<f32>(myFunc(1.0, 2.0));
+}`);
+  });
+
+  // uniformRaw names its own slot, unlike uniform() which generates one.
+  it("uniformRaw declares a custom-named uniform alongside the function", () => {
+    let glsl = compileGLSLFn((v: any) => v.mult(uniformRaw("uScale", "float")), {
+      name: "scale",
+      params: [{ name: "v", type: "float" }],
+    });
+    expect(glsl).toContain("uniform float uScale;");
+    expect(glsl).toContain("float scale(float v)");
+    expect(uniformRaw("uOther", "vec3").name).toBe("uOther");
+
+    recordShaderSource("glsl", "fragment", `#version 300 es
+precision highp float;
+layout(location=0) out vec4 outColor;
+${glsl}
+void main(void) { outColor = vec4(scale(2.0)); }`);
+  });
+
+  it("compileGLSLFn rejects a multi-return function", () => {
+    expect(() =>
+      compileGLSLFn(() => [float(1), float(2)] as any, { name: "bad", params: [] }),
+    ).toThrow(/multi-return/);
   });
 });

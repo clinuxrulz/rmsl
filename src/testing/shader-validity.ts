@@ -27,6 +27,10 @@
 import { expect } from "vitest";
 import { compileGLSL, compileWGSL } from "../rmsl";
 
+// This file only ever runs under vitest, in Node. Declared here rather than
+// depending on @types/node, which the package itself has no use for.
+declare const process: { env: Record<string, string | undefined> };
+
 export type ShaderLang = "glsl" | "wgsl";
 export type ShaderStage = "vertex" | "fragment";
 
@@ -93,6 +97,29 @@ function recordBoth(root: any, stage: ShaderStage, want: ShaderLang): string {
   const wanted = entries.find(e => e.lang === want)!;
   if (wanted.compileError) throw new Error(wanted.compileError);
   return wanted.src!;
+}
+
+/**
+ * Submit a hand-assembled shader for validation.
+ *
+ * `compileGLSLFn` / `compileWGSLFn` emit a single function rather than a whole
+ * shader, so they cannot be compiled on their own. A test can wrap the emitted
+ * function in a minimal shader and pass it here, which checks the thing that
+ * actually matters about them: that what they produce compiles when embedded.
+ */
+export function recordShaderSource(
+  lang: ShaderLang,
+  stage: ShaderStage,
+  src: string,
+): string {
+  recorded.push({
+    test: expect.getState().currentTestName ?? "<unknown test>",
+    lang,
+    stage,
+    pair: nextPair++, // no counterpart; this is a single-language submission
+    src,
+  });
+  return src;
 }
 
 /** Shape of `compileGLSL` / `compileWGSL`: callable, with vertex/fragment. */
