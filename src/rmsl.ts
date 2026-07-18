@@ -1027,6 +1027,13 @@ export function continue_(): void {
 // ==== COMPILERS ====
 
 // ========== GLSL Compiler ==========
+/** What compiling one node yields: statements to emit, and how to refer to it. */
+interface CompiledNode {
+  decls: string[];
+  body: string[];
+  expr: string;
+}
+
 interface CompileCtx {
   nextId: number;
   shaderStage: "vertex" | "fragment";
@@ -1037,12 +1044,19 @@ interface CompileCtx {
   wgslSamplers: Map<string, { textureSlot: string; samplerSlot: string }>;
   varDefs: Map<string, string>;
   /**
-   * Names already declared in the emitted source. A node graph can reach the
-   * same declaration through more than one root — `Fn` returning an array
-   * gives every element the whole block scope — and re-emitting it produces a
-   * redefinition error.
+   * What each node already compiled to, keyed by the node itself.
+   *
+   * The graph is a directed acyclic graph, not a tree: `Fn` returning an array
+   * gives every element the whole block scope, so one node is reachable from
+   * several roots — as the same object, not a copy. Compiling it once per root
+   * repeats whatever it does, which for a declaration is a redefinition and for
+   * an assignment or a loop is the work happening twice.
+   *
+   * So a node is compiled the first time it is reached and its statements are
+   * emitted there. Later arrivals get its expression alone, since the
+   * statements producing that expression are already in the output.
    */
-  declared: Set<string>;
+  memo: Map<BaseNode<ShaderType>, CompiledNode>;
   /**
    * Names of WGSL helper functions the shader needs, emitted ahead of the entry
    * point. GLSL provides some builtins that WGSL does not, so they are written
@@ -1169,7 +1183,7 @@ function assertStageResult(
 function compileGLSLStage(
   node: BaseNode<ShaderType> | ShaderType extends never ? never : any,
   ctx: CompileCtx,
-): { decls: string[]; body: string[]; expr: string } {
+): CompiledNode {
   if (node === undefined || node === null) {
     return { decls: [], body: [], expr: "0.0" };
   }
@@ -1183,6 +1197,21 @@ function compileGLSLStage(
     return { decls: [], body: [], expr: `vec3(${node.join(", ")})` };
   }
 
+  // Reached before: its statements are already in the output, so only the
+  // expression naming the result is handed back. Emitting them again would
+  // redeclare a variable, or run an assignment or a loop a second time.
+  let seen = ctx.memo.get(node);
+  if (seen) return { decls: [], body: [], expr: seen.expr };
+
+  let result = compileGLSLNode(node, ctx);
+  ctx.memo.set(node, result);
+  return result;
+}
+
+function compileGLSLNode(
+  node: BaseNode<ShaderType> | ShaderType extends never ? never : any,
+  ctx: CompileCtx,
+): CompiledNode {
   // Constant folding
   let folded = tryFold(node);
   if (folded) node = folded;
@@ -1416,14 +1445,7 @@ function compileGLSLStage(
 
     case "let": {
       let lhs = compileGLSLStage(node.params![0], ctx);
-      // Reached a second time: the variable already exists, so this is a
-      // reference. Compiling the initialiser again would repeat its side
-      // effects as well as redeclare the name.
-      if (ctx.declared.has(lhs.expr)) {
-        return { decls: [], body: [], expr: lhs.expr };
-      }
       let rhs = compileGLSLStage(node.params![1], ctx);
-      ctx.declared.add(lhs.expr);
       let vt = (node.params![0] as any)._t || "float";
       let rhsType = (node.params![1] as any)?._t || "float";
       let t = glslType(vt);
@@ -1656,7 +1678,7 @@ function compileGLSLWithStage(
     outputs: new Map(),
     wgslSamplers: new Map(),
     varDefs: new Map(),
-    declared: new Set(),
+    memo: new Map(),
     wgslHelpers: new Set(),
     inFn: false,
     fragDepthUsed: false,
@@ -1806,7 +1828,7 @@ function wgslType(brand: any): string {
 function compileWGSLStage(
   node: BaseNode<ShaderType> | any,
   ctx: CompileCtx,
-): { decls: string[]; body: string[]; expr: string } {
+): CompiledNode {
   if (node === undefined || node === null) {
     return { decls: [], body: [], expr: "0.0" };
   }
@@ -1820,6 +1842,21 @@ function compileWGSLStage(
     return { decls: [], body: [], expr: `vec3<f32>(${node.join(", ")})` };
   }
 
+  // Reached before: its statements are already in the output, so only the
+  // expression naming the result is handed back. Emitting them again would
+  // redeclare a variable, or run an assignment or a loop a second time.
+  let seen = ctx.memo.get(node);
+  if (seen) return { decls: [], body: [], expr: seen.expr };
+
+  let result = compileWGSLNode(node, ctx);
+  ctx.memo.set(node, result);
+  return result;
+}
+
+function compileWGSLNode(
+  node: BaseNode<ShaderType> | any,
+  ctx: CompileCtx,
+): CompiledNode {
   // Constant folding
   let folded = tryFold(node);
   if (folded) node = folded;
@@ -2105,11 +2142,7 @@ function compileWGSLStage(
 
     case "let": {
       let lhs = compileWGSLStage(node.params![0], ctx);
-      if (ctx.declared.has(lhs.expr)) {
-        return { decls: [], body: [], expr: lhs.expr };
-      }
       let rhs = compileWGSLStage(node.params![1], ctx);
-      ctx.declared.add(lhs.expr);
       let vt = (node.params![0] as any)._t || "float";
       let t = wgslType(vt);
       let varName = (node.params![0] as any).varName || lhs.expr;
@@ -2430,7 +2463,7 @@ function compileWGSLWithStage(
     outputs: new Map(),
     wgslSamplers: new Map(),
     varDefs: new Map(),
-    declared: new Set(),
+    memo: new Map(),
     wgslHelpers: new Set(),
     inFn: false,
     fragDepthUsed: false,
@@ -2613,7 +2646,7 @@ function compileFnBody(
       outputs: new Map(),
       wgslSamplers: new Map(),
       varDefs: new Map(),
-      declared: new Set(),
+      memo: new Map(),
       wgslHelpers: new Set(),
       inFn: false,
       fragDepthUsed: false,
@@ -2649,7 +2682,7 @@ function compileFnBody(
       outputs: new Map(),
       wgslSamplers: new Map(),
       varDefs: new Map(),
-      declared: new Set(),
+      memo: new Map(),
       wgslHelpers: new Set(),
       inFn: false,
       fragDepthUsed: false,

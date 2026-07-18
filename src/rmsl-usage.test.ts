@@ -1065,6 +1065,72 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     }
   });
 
+  // === Shared nodes ===
+  //
+  // The graph is a DAG, not a tree: `Fn` returning an array gives every element
+  // the whole block scope, so a node reachable from two roots is traversed
+  // twice. Emitting it twice duplicates its side effects, and suppressing only
+  // its declaration leaves the second copy referring to a name that no longer
+  // exists. Each shared node has to be emitted exactly once.
+
+  it("emits a shared If body once, not once per root", () => {
+    let build = () => Fn(() => {
+      let acc = float(0).toVar();
+      If(boolean(true), () => { acc.assign(acc.add(10)); });
+      return [acc, acc.mult(2)] as any;
+    });
+    let glsl = compileGLSL(build()() as any);
+    expect(glsl.match(/if \(true\)/g) ?? []).toHaveLength(1);
+    expect(glsl.match(/\+ 10\.0/g) ?? []).toHaveLength(1);
+
+    let wgsl = compileWGSL(build()() as any);
+    expect(wgsl.match(/if \(true\)/g) ?? []).toHaveLength(1);
+    expect(wgsl.match(/\+ 10f/g) ?? []).toHaveLength(1);
+  });
+
+  // A toVar() inside a shared block declares its variable in that block. Emit
+  // the block twice while declaring only once and the second copy reads a name
+  // scoped to the first — `_rmsl_2` used outside the `if` that declared it.
+  it("keeps a variable declared inside a shared block in scope", () => {
+    let build = () => Fn(() => {
+      let a = float(1).toVar();
+      If(boolean(true), () => { let b = a.add(2).toVar(); a.assign(b); });
+      return [a, a.mult(2)] as any;
+    });
+    let glsl = compileGLSL(build()() as any);
+    expect(glsl.match(/if \(true\)/g) ?? []).toHaveLength(1);
+    // The declaration and its only use are both inside the single block.
+    let inner = glsl.slice(glsl.indexOf("if (true)"));
+    let declared = inner.match(/float (_rmsl_\d+) = \(_rmsl_\d+ \+ 2\.0\);/);
+    expect(declared, "inner declaration emitted").not.toBeNull();
+    expect(inner.match(new RegExp(declared![1], "g")) ?? []).toHaveLength(2);
+
+    expect(compileWGSL(build()() as any).match(/if \(true\)/g) ?? []).toHaveLength(1);
+  });
+
+  // The loop counter is declared by the for header. Emitting the loop twice
+  // while suppressing the declaration produced `for (_rmsl_4; ...)`, whose
+  // counter belongs to the first loop's scope.
+  it("emits a shared For loop once, with its init intact", () => {
+    let build = () => Fn(() => {
+      let total = float(0).toVar();
+      For(
+        () => float(0).toVar(),
+        (i) => i.lessThan(4),
+        (i) => i.assign(i.add(1)),
+        (i) => { total.assign(total.add(i)); },
+      );
+      return [total, total.mult(2)] as any;
+    });
+    let glsl = compileGLSL(build()() as any);
+    expect(glsl.match(/for \(/g) ?? []).toHaveLength(1);
+    expect(glsl).toMatch(/for \(float _rmsl_\d+ = 0\.0;/);
+
+    let wgsl = compileWGSL(build()() as any);
+    expect(wgsl.match(/for \(/g) ?? []).toHaveLength(1);
+    expect(wgsl).toMatch(/for \(var _rmsl_\d+: f32 = 0f;/);
+  });
+
   // Folding runs on literal operands; the integer branch truncates with `| 0`.
   it("folds integer arithmetic with truncation", () => {
     expect(compileGLSL(Fn(() => int(7).div(int(2)).toVar())())).toContain("= 3;");
