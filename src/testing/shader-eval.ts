@@ -129,17 +129,41 @@ void main() { result = vec4(${callExpr(args)}, 0.0, 0.0, 1.0); }`;
 /** Compile, run and read back one float from the WGSL backend. */
 export async function evaluateWGSL(build: Build, args: number[] = []): Promise<number> {
   const fn = compileWGSLFn(build as any, { name: "rmsl_eval", params: params(args.length) });
-  const code = `${fn}
+  return runWGSL(`${fn}
 @group(0) @binding(0) var<storage, read_write> result: array<f32>;
 @compute @workgroup_size(1)
-fn main() { result[0] = ${callExpr(args)}; }`;
+fn main() { result[0] = ${callExpr(args)}; }`);
+}
 
+/**
+ * Run a compute shader that writes one float to `result[0]`, and read it back.
+ *
+ * Separate from `evaluateWGSL` so the execution path can be exercised with
+ * source the compiler would never produce, which is the only way to check that
+ * a shader failing to compile is actually reported.
+ */
+export async function runWGSL(code: string): Promise<number> {
   const gpu = await wgslDevice();
+
+  // A shader that fails to compile is reported as an uncaptured device error
+  // rather than an exception: the pipeline, the dispatch and the copy that
+  // follow are all quietly invalid, and the readback buffer is handed back
+  // still holding its zero initialiser. Reading that as a result means a
+  // completely broken backend returns 0, which is a value the evaluation tests
+  // legitimately expect in several places — so the failure has to be caught
+  // here or it reads as a pass.
+  gpu.pushErrorScope("validation");
   const module = gpu.createShaderModule({ code });
   const pipeline = gpu.createComputePipeline({
     layout: "auto",
     compute: { module, entryPoint: "main" },
   });
+  const failure = await gpu.popErrorScope();
+  if (failure) {
+    let detail = failure.message.split("\n").find((l: string) => l.includes("error:"))
+      ?? failure.message.split("\n")[0];
+    throw new Error(`WGSL shader failed to compile: ${detail.trim()}`);
+  }
 
   const STORAGE = 0x80, COPY_SRC = 0x4, MAP_READ = 0x1, COPY_DST = 0x8;
   const storage = gpu.createBuffer({ size: 4, usage: STORAGE | COPY_SRC });
