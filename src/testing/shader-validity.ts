@@ -202,7 +202,9 @@ export async function assertRecordedShadersValid(): Promise<void> {
 
   if (unexpected.length > 0) {
     report.push("", `${unexpected.length} shader(s) newly invalid:`);
-    for (const [key, error] of unexpected) report.push(`  ${key}\n      ${error}`);
+    for (const [key, error] of unexpected) {
+      report.push(`  ${describe(key)}\n      ${error}`);
+    }
   }
 
   if (fixed.length > 0) {
@@ -211,8 +213,23 @@ export async function assertRecordedShadersValid(): Promise<void> {
       `${fixed.length} entr(y/ies) in KNOWN_INVALID now compile — delete them from`,
       "src/testing/shader-validity.ts so the list keeps meaning something:",
     );
-    for (const key of fixed) report.push(`  ${key}`);
+    for (const key of fixed) report.push(`  ${describe(key)}  [key: ${key}]`);
   }
 
   throw new Error(report.join("\n"));
+}
+
+/**
+ * Render a `lang:test` key for reading.
+ *
+ * Every test's program is compiled to both backends, so a test named for one
+ * language routinely fails in the other — "wgsl:… compiles If/Else to GLSL"
+ * looks like a contradiction until you know that. Naming the backend as the
+ * output being reported, separately from the test, removes the collision.
+ */
+function describe(key: string): string {
+  const separator = key.indexOf(":");
+  const lang = key.slice(0, separator).toUpperCase();
+  const test = key.slice(separator + 1);
+  return `${test}\n      -> invalid ${lang} output`;
 }
