@@ -191,17 +191,18 @@ While(condition, () => {
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `uniform(type)` | `UniformNode<T>` | Declares a uniform (constant buffer input). Use `.name` for the generated name (e.g., `_rmsl_u0`), `.node()` for method chaining. |
-| `uniformRaw(name, type)` | `UniformNode<T>` | Declares a uniform with a custom name/slot (e.g., `uniformRaw("uMVP", "mat4")` emits `uniform mat4 uMVP`). Use `.name` for the custom name, `.node()` for method chaining. |
-| `attribute(type)` | `AttributeNode<T>` | Declares a vertex attribute. Use `.name` for the generated name (e.g., `_rmsl_a0`), `.node()` for method chaining. |
-| `varying(type)` | `VaryingNode<T>` | Declares a varying (vertex→fragment interpolant). Use `.name` for the generated name (e.g., `_rmsl_v0`), `.node()` for method chaining. |
+| `uniform(type)` | `UniformNode<T>` | Declares a uniform (constant buffer input). Use `.name` for the generated name (e.g., `_rmsl_u0`); methods and swizzles are available directly. |
+| `uniformRaw(name, type)` | `UniformNode<T>` | Declares a uniform with a custom name/slot (e.g., `uniformRaw("uMVP", "mat4")` emits `uniform mat4 uMVP`). Use `.name` for the custom name; methods and swizzles are available directly. |
+| `attribute(type)` | `AttributeNode<T>` | Declares a vertex attribute. Use `.name` for the generated name (e.g., `_rmsl_a0`); methods and swizzles are available directly. |
+| `varying(type)` | `VaryingNode<T>` | Declares a varying (vertex→fragment interpolant). Use `.name` for the generated name (e.g., `_rmsl_v0`); methods and swizzles are available directly. |
 | `output(type)` | `Node<T>` | Declares a fragment output with `@location(N)` |
 | `builtinPosition()` | `Node<"vec4">` | Maps to `gl_Position` / `@builtin(position)` |
 
-The `.node()` method returns a `Node<T>` with all type-specific methods (`.add()`, `.mult()`, `.x`, `.xyz`, etc.), while the original variable retains `.name`:
+A declared variable carries every method of its type (`.add()`, `.mult()`, `.x`,
+`.xyz`, ...) alongside `.name`:
 
 ```typescript
 let u = uniform("mat4");
-let uName = u.name;          // "_rmsl_u0"
-let result = u.node().mult(otherNode);  // method chaining
+let uName = u.name;             // "_rmsl_u0"
+let result = u.mult(otherNode); // methods are available directly
 ```

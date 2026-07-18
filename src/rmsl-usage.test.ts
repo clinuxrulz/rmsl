@@ -48,7 +48,7 @@ describe("RMSL", () => {
     let prog = Fn(() => {
       let uTime = uniform("float");
       let uColor = uniform("vec3");
-      return uTime.node().add(uColor.node().x);
+      return uTime.add(uColor.x);
     });
     let glsl = compileGLSL(prog());
     expect(glsl).toContain("uniform float");
@@ -301,7 +301,7 @@ describe("RMSL", () => {
   it("compiles texture sampling to GLSL", () => {
     let prog = Fn(() => {
       let tex = uniform("sampler2D");
-      return tex.node().texture(vec2(0.5, 0.5)).toVar();
+      return tex.texture(vec2(0.5, 0.5)).toVar();
     });
     let glsl = compileGLSL(prog());
     expect(glsl).toContain("uniform sampler2D");
@@ -311,7 +311,7 @@ describe("RMSL", () => {
   it("compiles texture sampling to WGSL", () => {
     let prog = Fn(() => {
       let tex = uniform("sampler2D");
-      return tex.node().texture(vec2(0.5, 0.5)).toVar();
+      return tex.texture(vec2(0.5, 0.5)).toVar();
     });
     let wgsl = compileWGSL(prog());
     expect(wgsl).toContain("texture_2d<f32>");
@@ -321,7 +321,7 @@ describe("RMSL", () => {
   it("compiles textureLod to GLSL", () => {
     let prog = Fn(() => {
       let tex = uniform("sampler2D");
-      return tex.node().textureLod(vec2(0.5, 0.5), float(0.0)).toVar();
+      return tex.textureLod(vec2(0.5, 0.5), float(0.0)).toVar();
     });
     let glsl = compileGLSL(prog());
     expect(glsl).toContain("textureLod(");
@@ -401,7 +401,7 @@ describe("RMSL", () => {
       let mvp = uniform("mat4");
       let pos = attribute("vec3");
       // gl_Position is a vec4, so the stage result has to be one too.
-      return vec4(mvp.node().multVec(pos.node()), 1.0);
+      return vec4(mvp.multVec(pos), 1.0);
     });
     let glsl = compileGLSL.vertex(prog());
     expect(glsl).toContain("gl_Position");
@@ -505,7 +505,7 @@ describe("RMSL", () => {
   it("varying is out in vertex, in in fragment GLSL", () => {
     let prog = Fn(() => {
       let v = varying("vec3");
-      return v.node().x;
+      return v.x;
     });
     let vertexGLSL = compileGLSL.vertex(prog());
     let fragmentGLSL = compileGLSL.fragment(prog());
@@ -533,7 +533,7 @@ describe("RMSL", () => {
       let pos = attribute("vec3");
       let mvp = uniform("mat4");
       // @builtin(position) is a vec4, so the stage result has to be one too.
-      return vec4(mvp.node().multVec(pos.node()), 1.0);
+      return vec4(mvp.multVec(pos), 1.0);
     });
     let wgsl = compileWGSL.vertex(prog());
     expect(wgsl).toContain("struct VertexInput");
@@ -545,7 +545,7 @@ describe("RMSL", () => {
     let prog = Fn(() => {
       let u = uniform("float");
       let tex = uniform("sampler2D");
-      return tex.node().texture(vec2(0, 0)).add(u.node());
+      return tex.texture(vec2(0, 0)).add(u);
     });
     let wgsl = compileWGSL.fragment(prog());
     expect(wgsl).toContain("@group(0) @binding(0) var<uniform>");

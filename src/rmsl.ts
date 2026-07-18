@@ -33,13 +33,12 @@ export interface BaseNode<A extends ShaderType> {
 }
 
 // === Typed node types with variable name access ===
+/**
+ * A uniform, attribute or varying. Carries its type's operations directly, so
+ * it can be used wherever a `Node<A>` can.
+ */
 export type VariableNode<A extends ShaderType> = Node<A> & {
   name: string;
-  /**
-   * Kept for compatibility. A variable node now carries the operations of its
-   * type directly, so this returns itself.
-   */
-  node(): Node<A>;
 };
 
 // Aliases rather than interfaces: `Node<A>` resolves through an indexed access,
@@ -280,10 +279,6 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
     this.type = config.type;
     this.params = config.params;
     this.value = config.value;
-  }
-
-  node(): Node<A> {
-    return this as unknown as Node<A>;
   }
 
   // === ArithOps ===
