@@ -462,6 +462,45 @@ describe("RMSL", () => {
     expect(glsl).toContain("out vec4");
   });
 
+  // GLSL ES 3.00 removed gl_FragColor, so a fragment shader with nowhere to
+  // write its colour renders nothing. WGSL already declared an implicit output
+  // for this case; GLSL computed the value and dropped it, so one program was
+  // red on WebGPU and blank on WebGL2.
+  it("declares an implicit colour output when a fragment shader has none", () => {
+    let build = () => Fn(() => vec4(1, 0, 0, 1).toVar());
+
+    let glsl = compileGLSL.fragment(build()());
+    expect(glsl).toContain("layout(location=0) out vec4 _rmsl_fragColor;");
+    expect(glsl).toMatch(/_rmsl_fragColor = \S+;/);
+
+    let wgsl = compileWGSL.fragment(build()());
+    expect(wgsl).toContain("_rmsl_fragColor");
+  });
+
+  // The stage result went into every declared output, whatever its type and
+  // whatever the program had already written there. WGSL leaves declared
+  // outputs to the program's own assignments; GLSL now does too.
+  it("leaves an explicitly written output alone", () => {
+    let prog = Fn(() => {
+      let outColor = output("vec4");
+      outColor.assign(vec4(1, 0, 0, 1));
+      return vec4(0, 1, 0, 1);
+    });
+    let glsl = compileGLSL.fragment(prog() as any);
+    expect(glsl.match(/_rmsl_o\d+ = /g) ?? []).toHaveLength(1);
+    expect(glsl).toContain("vec4(1, 0, 0, 1)");
+  });
+
+  it("does not assign a non-vec4 result to a declared output", () => {
+    let prog = Fn(() => {
+      let outColor = output("vec4");
+      outColor.assign(vec4(1, 0, 0, 1));
+      return float(2).toVar();
+    });
+    let glsl = compileGLSL.fragment(prog() as any);
+    expect(glsl.match(/_rmsl_o\d+ = /g) ?? []).toHaveLength(1);
+  });
+
   it("output() creates output in WGSL fragment", () => {
     let prog = Fn(() => {
       let outColor = output("vec4");

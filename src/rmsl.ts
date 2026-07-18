@@ -1700,6 +1700,13 @@ function compileGLSLWithStage(
   }
   assertStageResult(shaderStage, lastExpr, lastType);
   let hasVec4Result = lastExpr !== "0.0" && lastType === "vec4";
+  // A fragment stage that declares no output of its own still has to put its
+  // colour somewhere, and GLSL ES 3.00 removed gl_FragColor, so an output is
+  // declared for it. This mirrors the WGSL backend, which already emitted an
+  // implicit colour output — without it the same program rendered on WebGPU
+  // and produced nothing on WebGL2.
+  let emitImplicitColor =
+    shaderStage === "fragment" && ctx.outputs.size === 0 && hasVec4Result;
 
   let lines: string[] = [];
   lines.push("#version 300 es");
@@ -1724,7 +1731,13 @@ function compileGLSLWithStage(
       lines.push(`layout(location=${info.location}) out ${info.type} ${info.slot};`);
     }
   });
-  if (ctx.uniforms.size > 0 || ctx.attributes.size > 0 || ctx.outputs.size > 0) {
+  if (emitImplicitColor) {
+    lines.push("layout(location=0) out vec4 _rmsl_fragColor;");
+  }
+  if (
+    ctx.uniforms.size > 0 || ctx.attributes.size > 0 || ctx.outputs.size > 0
+    || emitImplicitColor
+  ) {
     lines.push("");
   }
 
@@ -1742,12 +1755,12 @@ function compileGLSLWithStage(
     for (let line of allBody) {
       lines.push("  " + line);
     }
-    if (ctx.outputs.size > 0) {
-      ctx.outputs.forEach((info) => {
-        if (info && info.slot && info.type) {
-          lines.push(`  ${info.slot} = ${lastExpr};`);
-        }
-      });
+    // Only the implicit output is written from the stage result. A declared
+    // output belongs to the program, which assigns it itself — writing the
+    // trailing expression into every declared slot ignored its type and
+    // overwrote whatever the program had already put there.
+    if (emitImplicitColor) {
+      lines.push(`  _rmsl_fragColor = ${lastExpr};`);
     }
     lines.push("}");
   }
