@@ -939,4 +939,80 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
       compileGLSLFn(() => [float(1), float(2)] as any, { name: "bad", params: [] }),
     ).toThrow(/multi-return/);
   });
+
+  // === Breadth coverage ===
+  //
+  // The mutation run showed these reached by no test at all. They are exported
+  // API, and going through the recording compilers means both backends are
+  // checked by a real implementation as well as by the assertion.
+
+  // Driven by a uniform because constant folding collapses these on literals,
+  // which is how they avoided being exercised in the first place.
+  it("compiles every unary math builtin", () => {
+    let ops = [
+      "sin", "cos", "tan", "asin", "acos", "atan", "abs", "sign",
+      "floor", "ceil", "fract", "sqrt", "inversesqrt",
+      "exp", "log", "exp2", "log2",
+    ] as const;
+    for (let op of ops) {
+      let prog = Fn(() => (uniform("float") as any)[op]().toVar());
+      expect(compileGLSL(prog()), op).toContain(op + "(");
+      // Names differ between backends (inversesqrt vs inverseSqrt), so WGSL is
+      // left to the validator rather than matched on text.
+      expect(() => compileWGSL(prog()), op).not.toThrow();
+    }
+  });
+
+  it("compiles every matrix type, including the non-square ones", () => {
+    let cases: [string, any, number][] = [
+      ["mat2", mat2, 4], ["mat2x3", mat2x3, 6], ["mat2x4", mat2x4, 8],
+      ["mat3x2", mat3x2, 6], ["mat3", mat3, 9], ["mat3x4", mat3x4, 12],
+      ["mat4x2", mat4x2, 8], ["mat4x3", mat4x3, 12], ["mat4", mat4, 16],
+    ];
+    for (let [name, ctor, count] of cases) {
+      let values = Array.from({ length: count }, (_, i) => i);
+      let prog = Fn(() => ctor(...values).toVar());
+      expect(compileGLSL(prog()), name).toContain(name + "(");
+      expect(compileWGSL(prog()), name).toContain("<f32>(");
+    }
+  });
+
+  it("compiles every swizzle accessor", () => {
+    let single = ["x", "y", "z", "w", "r", "g", "b", "a"];
+    let pairs = ["xy", "xz", "xw", "yz", "yw", "zw"];
+    let triples = ["xyz", "xyw", "xzw", "yzw", "rgb"];
+    for (let s of [...single, ...pairs, ...triples, "rgba"]) {
+      let prog = Fn(() => (uniform("vec4") as any)[s].toVar());
+      expect(compileGLSL(prog()), s).toContain("." + s);
+      expect(compileWGSL(prog()), s).toContain("." + s);
+    }
+  });
+
+  // Raw JS arrays are accepted wherever a node is, and their length picks the
+  // type. Only the vec3 length had ever been exercised.
+  it("wraps raw arrays by length", () => {
+    // Widths have to match the receiver — neither language multiplies a vec4 by
+    // a vec3, and writing it that way is how the first draft of this test got
+    // caught by the shader validation rather than by its own assertions.
+    let cases: [() => any, string, string][] = [
+      [() => vec2(1, 1).mult([1, 2] as any), "vec2", "vec2<f32>"],
+      [() => vec3(1, 1, 1).mult([1, 2, 3] as any), "vec3", "vec3<f32>"],
+      [() => vec4(1, 1, 1, 1).mult([1, 2, 3, 4] as any), "vec4", "vec4<f32>"],
+    ];
+    for (let [build, glslType, wgslType] of cases) {
+      let prog = Fn(() => build().toVar());
+      expect(compileGLSL(prog()), glslType).toContain(glslType + "(");
+      expect(compileWGSL(prog()), wgslType).toContain(wgslType + "(");
+    }
+  });
+
+  // Folding runs on literal operands; the integer branch truncates with `| 0`.
+  it("folds integer arithmetic with truncation", () => {
+    expect(compileGLSL(Fn(() => int(7).div(int(2)).toVar())())).toContain("= 3;");
+    expect(compileGLSL(Fn(() => int(7).add(int(2)).toVar())())).toContain("= 9;");
+    expect(compileGLSL(Fn(() => int(7).sub(int(2)).toVar())())).toContain("= 5;");
+    expect(compileGLSL(Fn(() => int(7).mult(int(2)).toVar())())).toContain("= 14;");
+    // The float path keeps the fraction the integer path drops.
+    expect(compileGLSL(Fn(() => float(7).div(float(2)).toVar())())).toContain("3.5");
+  });
 });
