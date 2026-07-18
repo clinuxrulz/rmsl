@@ -940,6 +940,33 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     ).toThrow(/multi-return/);
   });
 
+  // WGSL has no inverse() builtin, so the compiler writes one out on demand.
+  // The whole-shader path emits the helpers it collected; this path collected
+  // them into the same set and then dropped them, leaving a call to a function
+  // that was never defined.
+  it("compileWGSLFn emits the helpers the function body calls", () => {
+    let wgsl = compileWGSLFn((m: any) => m.inverse(), {
+      name: "invert",
+      params: [{ name: "m", type: "mat4" }],
+    });
+    expect(wgsl).toContain("_rmsl_inverse4(m)");
+    expect(wgsl).toContain("fn _rmsl_inverse4(");
+
+    recordShaderSource("wgsl", "fragment", `${wgsl}
+@fragment fn main() -> @location(0) vec4<f32> {
+  return invert(mat4x4<f32>(1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 0f, 1f))[0];
+}`);
+  });
+
+  it("compileWGSLFn emits the mat3 helper for a mat3 operand", () => {
+    let wgsl = compileWGSLFn((m: any) => m.inverse(), {
+      name: "invert3",
+      params: [{ name: "m", type: "mat3" }],
+    });
+    expect(wgsl).toContain("fn _rmsl_inverse3(");
+    expect(wgsl).not.toContain("fn _rmsl_inverse4(");
+  });
+
   // === Breadth coverage ===
   //
   // The mutation run showed these reached by no test at all. They are exported

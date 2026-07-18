@@ -2637,7 +2637,16 @@ function compileFnBody(
     const compiled = compileWGSLStage(result, ctx);
     const returnType = wgslType((result as any)._t || "float");
     const paramStr = params.map(p => `${p.name}: ${wgslType(p.type)}`).join(", ");
-    let code = `fn ${name}(${paramStr}) -> ${returnType} {\n`;
+    // Helpers standing in for GLSL builtins WGSL lacks, emitted ahead of the
+    // function that calls them. The whole-shader path does the same at its own
+    // top level; a function emitted on its own has to carry them itself, or it
+    // calls something that was never defined. Sorted so identical input gives
+    // identical output regardless of the order ops were reached.
+    let code = "";
+    for (const helper of [...ctx.wgslHelpers].sort()) {
+      code += `${WGSL_HELPERS[helper]}\n\n`;
+    }
+    code += `fn ${name}(${paramStr}) -> ${returnType} {\n`;
     for (const line of compiled.decls) {
       code += `  ${line}\n`;
     }
