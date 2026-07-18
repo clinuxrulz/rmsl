@@ -533,8 +533,21 @@ const REDUCING_OPS: Record<string, string> = {
 };
 
 function op(type: string, ...args: any[]): Node<ShaderType> {
-  let params = args.map(a => wrapValue(a) as BaseNode<ShaderType>);
-  let firstT = (params[0] as any)?._t || "float";
+  let first = wrapValue(args[0]) as BaseNode<ShaderType>;
+  let firstT = (first as any)?._t || "float";
+  // A plain JS number carries no shader type, and wrapValue can only guess —
+  // it picks float. Beside an integer operand that guess is wrong: the operands
+  // then disagree, codegen inserts a float() conversion, and the result no
+  // longer matches the node's own type, e.g. `int x = (float(u) % 2.0)`. The
+  // literal takes the operand's type instead.
+  let params = [
+    first,
+    ...args.slice(1).map(a =>
+      typeof a === "number" && Number.isInteger(a) && (firstT === "int" || firstT === "uint")
+        ? node({ _t: firstT, type: firstT, value: a }) as BaseNode<ShaderType>
+        : wrapValue(a) as BaseNode<ShaderType>,
+    ),
+  ];
   return node({ _t: REDUCING_OPS[type] ?? firstT, type, params });
 }
 

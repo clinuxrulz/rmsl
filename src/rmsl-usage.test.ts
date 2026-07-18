@@ -346,6 +346,24 @@ describe("RMSL", () => {
     expect(glsl).toContain("(1 < 2)");
   });
 
+  // A plain JS number has no shader type of its own. Typing it as float beside
+  // an integer operand made the operands disagree, so codegen inserted a
+  // conversion and produced `int x = (float(u) % 2.0)` — a float expression
+  // assigned to an int. A uniform is used because constants fold away.
+  it("gives a plain number the operand's integer type", () => {
+    let prog = Fn(() => uniform("int").mod(2).toVar());
+    let glsl = compileGLSL(prog());
+    expect(glsl).toMatch(/int \S+ = \(\S+ % 2\);/);
+    expect(glsl).not.toContain("float(");
+    expect(compileWGSL(prog())).toMatch(/var \S+: i32 = \(\S+ % 2i\);/);
+  });
+
+  it("keeps float literals float", () => {
+    let prog = Fn(() => uniform("float").add(2).toVar());
+    expect(compileGLSL(prog())).toContain("+ 2.0");
+    expect(compileWGSL(prog())).toContain("+ 2f");
+  });
+
   // === Phase 2: Constructor overloads ===
   it("vec3 scalar promotion", () => {
     let prog = Fn(() => vec3(1.0).toVar());
