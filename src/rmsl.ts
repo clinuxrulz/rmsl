@@ -456,16 +456,32 @@ function wrapValue<V>(x: V): Node<ExtractType<V>> {
   return x as any;
 }
 
+/**
+ * Ops whose result type is not the type of their first operand.
+ *
+ * Most ops are type-preserving — `vec3 + vec3` is a vec3 — so the default is to
+ * inherit from the first operand. These reduce instead, and their `Node` type
+ * parameter says so. Without an entry here the node's runtime `_t` disagrees
+ * with its declared type, and downstream code that switches on `_t` (variable
+ * declarations, the scalar-vs-vector split in comparison codegen) picks the
+ * wrong branch.
+ */
+const REDUCING_OPS: Record<string, string> = {
+  dot: "float",
+  length: "float",
+  distance: "float",
+};
+
 function op(type: string, ...args: any[]): Node<ShaderType> {
   let params = args.map(a => wrapValue(a) as BaseNode<ShaderType>);
   let firstT = (params[0] as any)?._t || "float";
-  return node({ _t: firstT, type, params });
+  return node({ _t: REDUCING_OPS[type] ?? firstT, type, params });
 }
 
 function op1(type: string, a: any): Node<ShaderType> {
   let wrapped = wrapValue(a) as BaseNode<ShaderType>;
   let t = (wrapped as any)?._t || "float";
-  return node({ _t: t, type, params: [wrapped] });
+  return node({ _t: REDUCING_OPS[type] ?? t, type, params: [wrapped] });
 }
 
 function comp(type: string, a: any, b: any): Node<"bool"> {

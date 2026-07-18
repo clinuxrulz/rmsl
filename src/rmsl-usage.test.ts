@@ -223,6 +223,28 @@ describe("RMSL", () => {
     expect(header).toMatch(/;\s*(\S+) = \(\1 \+ 1f\)\) \{$/);
   });
 
+  // dot/length/distance reduce a vector to a scalar. Typing the node after its
+  // first operand left `_t` as "vec2", which sent float comparisons down the
+  // vector path and emitted `lessThan(float, float)` — no such GLSL overload.
+  it("types length/distance/dot as float, not the operand type", () => {
+    let prog = Fn(() => {
+      let a = vec2(3, 4).toVar();
+      return [a.length().toVar(), a.distance(vec2(0, 0)).toVar(), a.dot(vec2(1, 1)).toVar()];
+    });
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain("float");
+    expect(glsl).not.toMatch(/vec2 \S+ = length\(/);
+    expect(glsl).not.toMatch(/vec2 \S+ = distance\(/);
+    expect(glsl).not.toMatch(/vec2 \S+ = dot\(/);
+  });
+
+  it("compares a distance against a float with an operator, not lessThan()", () => {
+    let prog = Fn(() => vec2(3, 4).distance(vec2(0, 0)).lessThan(5.0).toVar());
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain("< 5.0");
+    expect(glsl).not.toContain("lessThan(");
+  });
+
   // === Phase 1.2: Texture sampling ===
   it("compiles texture sampling to GLSL", () => {
     let prog = Fn(() => {
