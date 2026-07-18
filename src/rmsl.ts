@@ -4,6 +4,7 @@ const __brand = Symbol();
 export type ShaderType =
   | "float" | "vec2" | "vec3" | "vec4"
   | "int" | "uint" | "bool"
+  | "bvec2" | "bvec3" | "bvec4"
   | "mat2" | "mat2x3" | "mat2x4"
   | "mat3x2" | "mat3" | "mat3x4"
   | "mat4x2" | "mat4x3" | "mat4"
@@ -32,14 +33,20 @@ export interface BaseNode<A extends ShaderType> {
 }
 
 // === Typed node types with variable name access ===
-export interface VariableNode<A extends ShaderType> extends BaseNode<A> {
+export type VariableNode<A extends ShaderType> = Node<A> & {
   name: string;
+  /**
+   * Kept for compatibility. A variable node now carries the operations of its
+   * type directly, so this returns itself.
+   */
   node(): Node<A>;
-}
+};
 
-export interface UniformNode<A extends ShaderType> extends VariableNode<A> {}
-export interface AttributeNode<A extends ShaderType> extends VariableNode<A> {}
-export interface VaryingNode<A extends ShaderType> extends VariableNode<A> {}
+// Aliases rather than interfaces: `Node<A>` resolves through an indexed access,
+// and an interface may only extend a type whose members are statically known.
+export type UniformNode<A extends ShaderType> = VariableNode<A>;
+export type AttributeNode<A extends ShaderType> = VariableNode<A>;
+export type VaryingNode<A extends ShaderType> = VariableNode<A>;
 
 // === Type guards for node type checking ===
 export function isUniformNode<T extends ShaderType>(node: Node<T> | VariableNode<T>): node is UniformNode<T> {
@@ -78,18 +85,45 @@ type Vec2Swizzles = {
 };
 
 // === Node (branded + conditional methods + swizzles) ===
-export type Node<A extends ShaderType> = BaseNode<A>
-  & (A extends "float" ? ArithOps<"float"> & FloatMathOps<"float"> : {})
-  & (A extends "vec2" ? ArithOps<"vec2"> & FloatMathOps<"vec2"> & VecCommonOps<"vec2"> & Vec2Swizzles : {})
-  & (A extends "vec3" ? ArithOps<"vec3"> & FloatMathOps<"vec3"> & VecCommonOps<"vec3"> & Vec3Ops & Vec3Swizzles : {})
-  & (A extends "vec4" ? ArithOps<"vec4"> & FloatMathOps<"vec4"> & VecCommonOps<"vec4"> & Vec4Swizzles : {})
-  & (A extends "mat3" ? MatOps<"mat3"> : {})
-  & (A extends "mat4" ? MatOps<"mat4"> : {})
-  & (A extends "int" ? IntOps : {})
-  & (A extends "uint" ? UintOps : {})
-  & (A extends "bool" ? BoolOps : {})
-  & (A extends "sampler2D" ? SamplerOps : {})
-  & NodeMethods<A>;
+/**
+ * Which operations each shader type carries.
+ *
+ * A registry rather than a chain of conditionals. The conditional form made
+ * the checker evaluate every branch at each instantiation of `Node`, and a
+ * member referring back to `Node` then expanded without bound — which is why
+ * a self-referential op like `not(): Node<A>` exhausted its heap. Defunction-
+ * alising the dispatch into a lookup replaces that with a single indexed
+ * access, and the interface's members stay lazy.
+ *
+ * Every ShaderType needs an entry, so a new type cannot be added without
+ * saying what it supports.
+ */
+interface NodeOps {
+  float: ArithOps<"float"> & FloatMathOps<"float"> & ComparisonOps<"bool">;
+  vec2: ArithOps<"vec2"> & FloatMathOps<"vec2"> & ComparisonOps<"bvec2"> & VecCommonOps<"vec2"> & Vec2Swizzles;
+  vec3: ArithOps<"vec3"> & FloatMathOps<"vec3"> & ComparisonOps<"bvec3"> & VecCommonOps<"vec3"> & Vec3Ops & Vec3Swizzles;
+  vec4: ArithOps<"vec4"> & FloatMathOps<"vec4"> & ComparisonOps<"bvec4"> & VecCommonOps<"vec4"> & Vec4Swizzles;
+  int: IntOps;
+  uint: UintOps;
+  bool: BoolOps;
+  bvec2: BoolVecOps<"bvec2">;
+  bvec3: BoolVecOps<"bvec3">;
+  bvec4: BoolVecOps<"bvec4">;
+  mat2: {};
+  mat2x3: {};
+  mat2x4: {};
+  mat3x2: {};
+  mat3: MatOps<"mat3">;
+  mat3x4: {};
+  mat4x2: {};
+  mat4x3: {};
+  mat4: MatOps<"mat4">;
+  sampler2D: SamplerOps;
+  samplerCube: {};
+  void: {};
+}
+
+export type Node<A extends ShaderType> = BaseNode<A> & NodeOps[A] & NodeMethods<A>;
 
 // === Operation interfaces (shared across Node types) ===
 interface ArithOps<A extends ShaderType> {
@@ -113,13 +147,28 @@ interface FloatMathOps<A extends ShaderType> {
   mod(other: FloatLike): Node<A>;
   mix(b: Node<A>, t: FloatLike): Node<A>;
   clamp(min: FloatLike, max: FloatLike): Node<A>;
+  // Implemented for every numeric type; previously declared only on vectors,
+  // so a float could call it at runtime but not in the types.
+  smoothstep(edge0: FloatLike, edge1: FloatLike): Node<A>;
+  step(edge: FloatLike): Node<A>;
   fwidth(): Node<A>;
-  lessThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
-  greaterThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
-  lessThanEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
-  greaterThanEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
-  equal(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
-  notEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
+}
+
+/**
+ * Component-wise comparisons, parameterised by their result type.
+ *
+ * Attached per concrete node type below rather than derived with a conditional:
+ * resolving `Node<Conditional<A>>` for a generic `A` forces the checker to
+ * expand the whole `Node` intersection at every call site, which exhausts its
+ * heap.
+ */
+interface ComparisonOps<R extends ShaderType> {
+  lessThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<R>;
+  greaterThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<R>;
+  lessThanEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<R>;
+  greaterThanEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<R>;
+  equal(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<R>;
+  notEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<R>;
 }
 
 interface VecCommonOps<A extends "vec2" | "vec3" | "vec4"> {
@@ -197,6 +246,20 @@ interface BoolOps {
   and(other: BooleanLike): Node<"bool">;
   or(other: BooleanLike): Node<"bool">;
   not(): Node<"bool">;
+}
+
+/**
+ * A component-wise comparison result. There is deliberately no implicit path
+ * to `bool`: "is this vector less than that one" has no single answer, so the
+ * reduction is spelled out with `all()` or `any()`.
+ */
+interface BoolVecOps<A extends ShaderType> {
+  /** True when every component is true. */
+  all(): Node<"bool">;
+  /** True when at least one component is true. */
+  any(): Node<"bool">;
+  /** Negates each component. */
+  not(): Node<A>;
 }
 
 interface NodeMethods<A extends ShaderType> {
@@ -328,6 +391,8 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   and(other: any): any { return op("and", this, other); }
   or(other: any): any { return op("or", this, other); }
   not(): any { return op1("not", this); }
+  all(): any { return node({ _t: "bool", type: "all", params: [this as BaseNode<ShaderType>] }); }
+  any(): any { return node({ _t: "bool", type: "any", params: [this as BaseNode<ShaderType>] }); }
 
   // === NodeMethods ===
   assign(value: BaseNode<A>): void {
@@ -484,9 +549,26 @@ function op1(type: string, a: any): Node<ShaderType> {
   return node({ _t: REDUCING_OPS[type] ?? t, type, params: [wrapped] });
 }
 
-function comp(type: string, a: any, b: any): Node<"bool"> {
+/** Component count per type, for the operations whose result width follows it. */
+const TYPE_WIDTH: Record<string, number> = {
+  float: 1, int: 1, uint: 1, bool: 1,
+  vec2: 2, vec3: 3, vec4: 4,
+  bvec2: 2, bvec3: 3, bvec4: 4,
+};
+
+/**
+ * Comparisons are component-wise, so comparing vectors yields one boolean per
+ * component — `bvec3` for vec3 — and only scalars reduce to a single `bool`.
+ * This mirrors GLSL, where `lessThan(vec3, vec3)` is a bvec3, and matches how
+ * Three.js's TSL types the same operations.
+ */
+function comp(type: string, a: any, b: any): Node<ShaderType> {
   let params = [wrapValue(a) as BaseNode<ShaderType>, wrapValue(b) as BaseNode<ShaderType>];
-  return node({ _t: "bool", type, params }) as Node<"bool">;
+  let width = Math.max(
+    TYPE_WIDTH[(params[0] as any)?._t] ?? 1,
+    TYPE_WIDTH[(params[1] as any)?._t] ?? 1,
+  );
+  return node({ _t: width > 1 ? `bvec${width}` : "bool", type, params });
 }
 
 function swizzle<A extends ShaderType>(src: BaseNode<ShaderType>, pattern: string): Node<A> {
@@ -898,6 +980,7 @@ interface CompileCtx {
 let typeToGLSL: Record<string, string> = {
   float: "float", vec2: "vec2", vec3: "vec3", vec4: "vec4",
   int: "int", uint: "uint", bool: "bool",
+  bvec2: "bvec2", bvec3: "bvec3", bvec4: "bvec4",
   mat2: "mat2", mat2x3: "mat2x3", mat2x4: "mat2x4",
   mat3x2: "mat3x2", mat3: "mat3", mat3x4: "mat3x4",
   mat4x2: "mat4x2", mat4x3: "mat4x3", mat4: "mat4",
@@ -1101,7 +1184,24 @@ function compileGLSLStage(
     }
     case "not": {
       let a = compileGLSLStage(node.params![0], ctx);
-      return { decls: a.decls, body: a.body, expr: `(!${a.expr})` };
+      // GLSL's `!` takes a bool only; boolean vectors go through not().
+      let operandType = (node.params![0] as any)?._t;
+      let isBoolVector = operandType === "bvec2" || operandType === "bvec3" || operandType === "bvec4";
+      return {
+        decls: a.decls,
+        body: a.body,
+        expr: isBoolVector ? `not(${a.expr})` : `(!${a.expr})`,
+      };
+    }
+
+    case "all": {
+      let a = compileGLSLStage(node.params![0], ctx);
+      return { decls: a.decls, body: a.body, expr: `all(${a.expr})` };
+    }
+
+    case "any": {
+      let a = compileGLSLStage(node.params![0], ctx);
+      return { decls: a.decls, body: a.body, expr: `any(${a.expr})` };
     }
 
     // Binary math ops (same pattern for all)
@@ -1538,6 +1638,7 @@ export const compileGLSL: {
 let typeToWGSL: Record<string, string> = {
   float: "f32", vec2: "vec2<f32>", vec3: "vec3<f32>", vec4: "vec4<f32>",
   int: "i32", uint: "u32", bool: "bool",
+  bvec2: "vec2<bool>", bvec3: "vec3<bool>", bvec4: "vec4<bool>",
   mat2: "mat2x2<f32>", mat2x3: "mat2x3<f32>", mat2x4: "mat2x4<f32>",
   mat3x2: "mat3x2<f32>", mat3: "mat3x3<f32>", mat3x4: "mat3x4<f32>",
   mat4x2: "mat4x2<f32>", mat4x3: "mat4x3<f32>", mat4: "mat4x4<f32>",
@@ -1701,8 +1802,19 @@ function compileWGSLStage(
       return { decls: a.decls, body: a.body, expr: `(-${a.expr})` };
     }
     case "not": {
+      // Unlike GLSL, WGSL's `!` is defined for vecN<bool> too.
       let a = compileWGSLStage(node.params![0], ctx);
       return { decls: a.decls, body: a.body, expr: `(!${a.expr})` };
+    }
+
+    case "all": {
+      let a = compileWGSLStage(node.params![0], ctx);
+      return { decls: a.decls, body: a.body, expr: `all(${a.expr})` };
+    }
+
+    case "any": {
+      let a = compileWGSLStage(node.params![0], ctx);
+      return { decls: a.decls, body: a.body, expr: `any(${a.expr})` };
     }
 
     case "add": return binaryWGSL(node, ctx, "+");

@@ -176,16 +176,53 @@ describe("RMSL", () => {
     expect(wgsl).toContain("(1f < 2f)");
   });
 
+  // Comparing vectors gives one boolean per component, so the result is a
+  // bvecN rather than a bool. GLSL spells it with a function; WGSL uses the
+  // operator directly. Both yield a boolean vector.
   it("compiles vec3 lessThan to GLSL (vector path)", () => {
     let prog = Fn(() => vec3(1,2,3).lessThan(vec3(4,5,6)).toVar());
     let glsl = compileGLSL(prog());
     expect(glsl).toContain("lessThan(");
+    expect(glsl).toContain("bvec3 ");
+  });
+
+  it("compiles vec3 lessThan to WGSL (vector path)", () => {
+    let prog = Fn(() => vec3(1,2,3).lessThan(vec3(4,5,6)).toVar());
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).toContain("vec3<bool>");
   });
 
   it("compiles vec3 equal/notEqual to GLSL", () => {
     let prog = Fn(() => vec3(1,2,3).equal(vec3(1,2,3)).toVar());
     let glsl = compileGLSL(prog());
     expect(glsl).toContain("equal(");
+    expect(glsl).toContain("bvec3 ");
+  });
+
+  it("reduces a boolean vector with all()/any() in GLSL", () => {
+    let prog = Fn(() => [
+      vec3(1,2,3).lessThan(vec3(4,5,6)).all().toVar(),
+      vec3(1,2,3).greaterThan(vec3(4,5,6)).any().toVar(),
+    ]);
+    let [a, b] = prog() as any;
+    let glsl = compileGLSL([a, b]);
+    expect(glsl).toContain("all(lessThan(");
+    expect(glsl).toContain("any(greaterThan(");
+    expect(glsl).toContain("bool ");
+  });
+
+  it("reduces a boolean vector with all()/any() in WGSL", () => {
+    let prog = Fn(() => vec3(1,2,3).lessThan(vec3(4,5,6)).all().toVar());
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).toContain("all(");
+    expect(wgsl).toContain(": bool");
+  });
+
+  // GLSL's `!` is scalar-only, so negating a boolean vector needs not().
+  it("negates a boolean vector component-wise in both backends", () => {
+    let prog = Fn(() => vec3(1,2,3).lessThan(vec3(4,5,6)).not().toVar());
+    expect(compileGLSL(prog())).toContain("not(lessThan(");
+    expect(compileWGSL(prog())).toContain("(!(");
   });
 
   // refract(I, N, eta) takes three arguments; routing it through the binary

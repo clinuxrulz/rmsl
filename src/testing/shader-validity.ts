@@ -46,13 +46,6 @@ const recorded: Recorded[] = [];
  */
 export const KNOWN_INVALID: Record<string, string> = {
 
-  // GLSL vector comparisons return bvecN, but RMSL types them Node<"bool">
-  // and so declares the variable `bool`.
-  "glsl:RMSL > compiles vec3 lessThan to GLSL (vector path)":
-    "vector comparison returns bvec3 but is declared bool",
-  "glsl:RMSL > compiles vec3 equal/notEqual to GLSL":
-    "vector comparison returns bvec3 but is declared bool",
-
 };
 
 function record(lang: ShaderLang, stage: ShaderStage, src: string): string {
