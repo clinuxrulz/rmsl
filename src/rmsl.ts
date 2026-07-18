@@ -146,10 +146,15 @@ interface FloatMathOps<A extends ShaderType> {
   mod(other: FloatLike): Node<A>;
   mix(b: Node<A>, t: FloatLike): Node<A>;
   clamp(min: FloatLike, max: FloatLike): Node<A>;
-  // Implemented for every numeric type; previously declared only on vectors,
-  // so a float could call it at runtime but not in the types.
-  smoothstep(edge0: FloatLike, edge1: FloatLike): Node<A>;
-  step(edge: FloatLike): Node<A>;
+  // Declared here rather than on VecCommonOps so floats get them too, and so
+  // there is only one declaration: both interfaces apply to the vector types,
+  // and two declarations disagreeing about the return type leaves the caller
+  // with whichever the checker resolves first.
+  //
+  // Both edge forms are valid — GLSL has step(genType, genType) alongside
+  // step(float, genType), and likewise for smoothstep.
+  step(edge: Node<A> | FloatLike): Node<A>;
+  smoothstep(edge0: Node<A> | FloatLike, edge1: Node<A> | FloatLike): Node<A>;
   fwidth(): Node<A>;
 }
 
@@ -179,8 +184,10 @@ interface VecCommonOps<A extends "vec2" | "vec3" | "vec4"> {
   refract(normal: Node<A>, eta: FloatLike): Node<A>;
   clamp(min: Node<A> | FloatLike, max: Node<A> | FloatLike): Node<A>;
   mix(b: Node<A>, t: FloatLike): Node<A>;
-  step(edge: Node<A> | FloatLike): Node<"float">;
-  smoothstep(edge0: Node<A> | FloatLike, edge1: Node<A> | FloatLike): Node<A>;
+  // step/smoothstep live on FloatMathOps, which also applies to every vector
+  // type. Declaring them here as well gave the vector types two declarations,
+  // and this one's `Node<"float">` return was wrong: GLSL's step returns
+  // genType, so `vec3.step(...)` is a vec3.
 }
 
 interface Vec3Ops {
@@ -532,6 +539,42 @@ const REDUCING_OPS: Record<string, string> = {
   distance: "float",
 };
 
+/** Component count per type, for the operations whose width follows it. */
+const TYPE_WIDTH: Record<string, number> = {
+  float: 1, int: 1, uint: 1, bool: 1,
+  vec2: 2, vec3: 3, vec4: 4,
+  bvec2: 2, bvec3: 3, bvec4: 4,
+};
+
+/**
+ * Where an op's defining operand sits, when it is not the first.
+ *
+ * Params are emitted in the order the target language expects, and GLSL takes
+ * the value last in `step(edge, x)` and `smoothstep(e0, e1, x)`. Reading the
+ * type from the first operand there gives the edge's, so `vec3.step(0.5)`
+ * produced a node typed float around a call that returns vec3.
+ */
+const VALUE_OPERAND: Record<string, number> = {
+  step: 1,
+  smoothstep: 2,
+};
+
+/**
+ * Ops whose operands must all share the defining operand's type.
+ *
+ * Their signatures accept `Node<A> | FloatLike`, so a scalar can be passed
+ * where a vector is expected — `vec3.step(0.5)`. GLSL tolerates some of those
+ * and WGSL none of them, so rather than patch each backend the scalar is
+ * broadcast once here and both receive operands that already agree.
+ *
+ * Ops taking a genuinely scalar argument are absent by design: `mix(a, b, t)`
+ * and `refract(i, n, eta)` declare that argument `FloatLike`, and broadcasting
+ * it would produce `refract(vec3, vec3, vec3)`, which neither language has.
+ */
+const UNIFORM_OPERAND_OPS = new Set([
+  "step", "smoothstep", "clamp", "min", "max", "pow",
+]);
+
 function op(type: string, ...args: any[]): Node<ShaderType> {
   let first = wrapValue(args[0]) as BaseNode<ShaderType>;
   let firstT = (first as any)?._t || "float";
@@ -548,7 +591,21 @@ function op(type: string, ...args: any[]): Node<ShaderType> {
         : wrapValue(a) as BaseNode<ShaderType>,
     ),
   ];
-  return node({ _t: REDUCING_OPS[type] ?? firstT, type, params });
+  // The operand that defines the op's type — usually the first, but `step` and
+  // `smoothstep` take the value last because that is the argument order both
+  // languages expect.
+  let valueIndex = VALUE_OPERAND[type] ?? 0;
+  let valueT = (params[valueIndex] as any)?._t ?? firstT;
+
+  if (UNIFORM_OPERAND_OPS.has(type) && (TYPE_WIDTH[valueT] ?? 1) > 1) {
+    params = params.map(p =>
+      (TYPE_WIDTH[(p as any)?._t] ?? 1) === 1
+        ? node({ _t: valueT, type: "construct", params: [p] }) as BaseNode<ShaderType>
+        : p,
+    );
+  }
+
+  return node({ _t: REDUCING_OPS[type] ?? valueT, type, params });
 }
 
 function op1(type: string, a: any): Node<ShaderType> {
@@ -556,13 +613,6 @@ function op1(type: string, a: any): Node<ShaderType> {
   let t = (wrapped as any)?._t || "float";
   return node({ _t: REDUCING_OPS[type] ?? t, type, params: [wrapped] });
 }
-
-/** Component count per type, for the operations whose result width follows it. */
-const TYPE_WIDTH: Record<string, number> = {
-  float: 1, int: 1, uint: 1, bool: 1,
-  vec2: 2, vec3: 3, vec4: 4,
-  bvec2: 2, bvec3: 3, bvec4: 4,
-};
 
 /**
  * Comparisons are component-wise, so comparing vectors yields one boolean per
@@ -572,10 +622,22 @@ const TYPE_WIDTH: Record<string, number> = {
  */
 function comp(type: string, a: any, b: any): Node<ShaderType> {
   let params = [wrapValue(a) as BaseNode<ShaderType>, wrapValue(b) as BaseNode<ShaderType>];
-  let width = Math.max(
-    TYPE_WIDTH[(params[0] as any)?._t] ?? 1,
-    TYPE_WIDTH[(params[1] as any)?._t] ?? 1,
-  );
+  let widths = params.map(p => TYPE_WIDTH[(p as any)?._t] ?? 1);
+  let width = Math.max(widths[0], widths[1]);
+
+  // Neither language compares a vector against a scalar: GLSL has no
+  // lessThan(vec3, float) and WGSL no `operator < (vec3<f32>, f32)`. The
+  // signatures accept the mix, so the scalar is broadcast to the vector's
+  // width — `lessThan(v, vec3(0.5))` — which is what the caller meant.
+  if (width > 1) {
+    let wide = (params[widths[0] >= widths[1] ? 0 : 1] as any)._t as ShaderType;
+    params = params.map((p, i) =>
+      widths[i] === 1
+        ? node({ _t: wide, type: "construct", params: [p] }) as BaseNode<ShaderType>
+        : p,
+    );
+  }
+
   return node({ _t: width > 1 ? `bvec${width}` : "bool", type, params });
 }
 

@@ -693,6 +693,25 @@ describe("RMSL", () => {
     expect(glsl).toContain(op);
   });
 
+  // Neither language compares a vector against a scalar, so the scalar has to
+  // be broadcast: GLSL has no lessThan(vec3, float) and WGSL no
+  // `operator < (vec3<f32>, f32)`. The signatures accept the mix.
+  it("broadcasts a scalar compared against a vector", () => {
+    let prog = Fn(() => vec3(1, 2, 3).lessThan(uniform("float")).all().toVar());
+    expect(compileGLSL(prog())).toMatch(/lessThan\(vec3\(1, 2, 3\), vec3\(\S+\)\)/);
+    expect(compileWGSL(prog())).toMatch(/vec3<f32>\(1, 2, 3\) < vec3<f32>\(\S+\)/);
+  });
+
+  // step/smoothstep take the value last, so the result type follows that
+  // operand rather than the edge — `vec3.step(0.5)` is a vec3, not a float.
+  it("types step/smoothstep from the value, not the edge", () => {
+    let stepped = Fn(() => uniform("vec3").step(0.5).toVar());
+    let smoothed = Fn(() => uniform("vec3").smoothstep(0.0, 1.0).toVar());
+    expect(compileGLSL(stepped())).toMatch(/vec3 \S+ = step\(/);
+    expect(compileGLSL(smoothed())).toMatch(/vec3 \S+ = smoothstep\(/);
+    expect(compileWGSL(stepped())).toMatch(/var \S+: vec3<f32> = step\(/);
+  });
+
   it("vec3.reflect/refract/clamp/mix/step/smoothstep compile to GLSL", () => {
     let v = vec3(1,2,3);
     let n = vec3(0,1,0);
