@@ -182,19 +182,29 @@ async function validateWGSL(items: Recorded[]): Promise<(string | null)[]> {
   if (!adapter) throw new Error("No WebGPU adapter for WGSL validation");
   const device = await adapter.requestDevice();
 
-  const results: (string | null)[] = [];
-  for (const item of items) {
+  // pushErrorScope, createShaderModule and popErrorScope are all synchronous
+  // stack operations — only the *result* of a pop is asynchronous. So every
+  // module is created and its scope popped up front, and the results are
+  // awaited together. Awaiting each pop inside the loop instead cost one round
+  // trip to the device per shader, which was around 100ms each and made this
+  // function the bulk of the suite's running time.
+  const pending = items.map(item => {
     device.pushErrorScope("validation");
     device.createShaderModule({ code: item.src! });
-    const error = await device.popErrorScope();
-    results.push(
+    return device.popErrorScope();
+  });
+
+  try {
+    const errors = await Promise.all(pending);
+    return errors.map(error =>
       error
-        ? error.message.split("\n").find(l => l.includes("error:"))?.trim()
+        ? error.message.split("\n").find((l: string) => l.includes("error:"))?.trim()
           ?? error.message.split("\n")[0]
         : null,
     );
+  } finally {
+    device.destroy?.();
   }
-  return results;
 }
 
 /**
