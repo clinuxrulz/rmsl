@@ -1,5 +1,6 @@
 /**
- * Checks that every shader the test suite generates is actually valid.
+ * Checks that every shader the test suite generates is actually valid, in both
+ * backends.
  *
  * The suite's assertions are substring matches — `expect(glsl).toContain(...)`
  * — which cannot tell a correct shader from a broken one that happens to
@@ -24,6 +25,7 @@
  */
 
 import { expect } from "vitest";
+import { compileGLSL, compileWGSL } from "../rmsl";
 
 export type ShaderLang = "glsl" | "wgsl";
 export type ShaderStage = "vertex" | "fragment";
@@ -32,7 +34,9 @@ interface Recorded {
   test: string;
   lang: ShaderLang;
   stage: ShaderStage;
-  src: string;
+  /** null when the compiler threw rather than producing source. */
+  src: string | null;
+  compileError?: string;
 }
 
 const recorded: Recorded[] = [];
@@ -45,17 +49,37 @@ const recorded: Recorded[] = [];
  * the problems it documents.
  */
 export const KNOWN_INVALID: Record<string, string> = {
-
 };
 
-function record(lang: ShaderLang, stage: ShaderStage, src: string): string {
-  recorded.push({
-    test: expect.getState().currentTestName ?? "<unknown test>",
-    lang,
-    stage,
-    src,
-  });
-  return src;
+/**
+ * Compile a program to *both* backends, whichever one the test asked for.
+ *
+ * Coverage had drifted badly: of 69 tests, 48 only ever compiled to GLSL and
+ * 20 only to WGSL, so a backend-specific defect stayed invisible unless
+ * someone had thought to write the counterpart by hand. Compiling both here
+ * makes parity structural — a new test gets it for free — while the test's own
+ * assertions still run against the language it chose.
+ */
+function recordBoth(root: any, stage: ShaderStage): void {
+  const test = expect.getState().currentTestName ?? "<unknown test>";
+  for (const [lang, compile] of [
+    ["glsl", compileGLSL] as const,
+    ["wgsl", compileWGSL] as const,
+  ]) {
+    const entry: Recorded = { test, lang, stage, src: null };
+    try {
+      entry.src = stage === "vertex" ? compile.vertex(root) : compile.fragment(root);
+    } catch (error) {
+      // A backend refusing to compile is itself a signal, so it is recorded
+      // rather than swallowed.
+      entry.compileError = error instanceof Error ? error.message : String(error);
+    }
+    const alreadySeen = recorded.some(
+      r => r.test === test && r.lang === lang && r.stage === stage
+        && r.src === entry.src && r.compileError === entry.compileError,
+    );
+    if (!alreadySeen) recorded.push(entry);
+  }
 }
 
 /** Shape of `compileGLSL` / `compileWGSL`: callable, with vertex/fragment. */
@@ -65,15 +89,18 @@ interface Compiler {
   fragment(root: any): string;
 }
 
-function wrap(lang: ShaderLang, compile: Compiler): Compiler {
-  return Object.assign((root: any) => record(lang, "fragment", compile(root)), {
-    vertex: (root: any) => record(lang, "vertex", compile.vertex(root)),
-    fragment: (root: any) => record(lang, "fragment", compile.fragment(root)),
-  });
+function wrap(compile: Compiler): Compiler {
+  return Object.assign(
+    (root: any) => { recordBoth(root, "fragment"); return compile(root); },
+    {
+      vertex: (root: any) => { recordBoth(root, "vertex"); return compile.vertex(root); },
+      fragment: (root: any) => { recordBoth(root, "fragment"); return compile.fragment(root); },
+    },
+  );
 }
 
-export const recordGLSL = (compile: Compiler) => wrap("glsl", compile);
-export const recordWGSL = (compile: Compiler) => wrap("wgsl", compile);
+export const recordGLSL = (compile: Compiler) => wrap(compile);
+export const recordWGSL = (compile: Compiler) => wrap(compile);
 
 /** Compile every recorded GLSL shader in one browser session. */
 async function validateGLSL(items: Recorded[]): Promise<(string | null)[]> {
@@ -97,7 +124,7 @@ async function validateGLSL(items: Recorded[]): Promise<(string | null)[]> {
         if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return null;
         return (gl.getShaderInfoLog(shader) ?? "").trim().split("\n")[0];
       });
-    }, items.map(i => ({ src: i.src, stage: i.stage })));
+    }, items.map(i => ({ src: i.src!, stage: i.stage })));
   } finally {
     await browser.close();
   }
@@ -114,7 +141,7 @@ async function validateWGSL(items: Recorded[]): Promise<(string | null)[]> {
   const results: (string | null)[] = [];
   for (const item of items) {
     device.pushErrorScope("validation");
-    device.createShaderModule({ code: item.src });
+    device.createShaderModule({ code: item.src! });
     const error = await device.popErrorScope();
     results.push(
       error
@@ -131,8 +158,10 @@ async function validateWGSL(items: Recorded[]): Promise<(string | null)[]> {
  * invalid shaders differs from `KNOWN_INVALID` in either direction.
  */
 export async function assertRecordedShadersValid(): Promise<void> {
-  const glsl = recorded.filter(r => r.lang === "glsl");
-  const wgsl = recorded.filter(r => r.lang === "wgsl");
+  // An entry whose compiler threw has no source to hand a validator; it is
+  // already accounted for below.
+  const glsl = recorded.filter(r => r.lang === "glsl" && r.src !== null);
+  const wgsl = recorded.filter(r => r.lang === "wgsl" && r.src !== null);
 
   const [glslErrors, wgslErrors] = await Promise.all([
     validateGLSL(glsl),
@@ -140,6 +169,17 @@ export async function assertRecordedShadersValid(): Promise<void> {
   ]);
 
   const failed = new Map<string, string>();
+  for (const entry of recorded) {
+    if (!entry.compileError) continue;
+    // Both backends refusing a program is consistent, and some tests assert
+    // exactly that — builtinFragDepth() in a vertex stage, for one. Only one
+    // backend refusing what the other accepts is a gap worth reporting.
+    const counterpart = recorded.find(
+      r => r.test === entry.test && r.stage === entry.stage && r.lang !== entry.lang,
+    );
+    if (counterpart?.compileError) continue;
+    failed.set(`${entry.lang}:${entry.test}`, `did not compile — ${entry.compileError}`);
+  }
   glsl.forEach((item, i) => {
     const e = glslErrors[i];
     if (e) failed.set(`glsl:${item.test}`, e);
@@ -155,7 +195,9 @@ export async function assertRecordedShadersValid(): Promise<void> {
   if (unexpected.length === 0 && fixed.length === 0) return;
 
   const report: string[] = [
-    `Validated ${recorded.length} generated shaders (${glsl.length} GLSL, ${wgsl.length} WGSL).`,
+    `Validated ${recorded.length} generated shaders from`
+    + ` ${new Set(recorded.map(r => r.test)).size} tests`
+    + ` (${glsl.length} GLSL, ${wgsl.length} WGSL).`,
   ];
 
   if (unexpected.length > 0) {

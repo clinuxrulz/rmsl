@@ -968,6 +968,12 @@ interface CompileCtx {
    * redefinition error.
    */
   declared: Set<string>;
+  /**
+   * Names of WGSL helper functions the shader needs, emitted ahead of the entry
+   * point. GLSL provides some builtins that WGSL does not, so they are written
+   * out on demand rather than always.
+   */
+  wgslHelpers: Set<string>;
   inFn: boolean;
   fragDepthUsed: boolean;
 }
@@ -1204,7 +1210,14 @@ function compileGLSLStage(
     case "sub": return binaryGLSL(node, ctx, "-");
     case "mult": return binaryGLSL(node, ctx, "*");
     case "div": return binaryGLSL(node, ctx, "/");
-    case "mod": return binaryGLSL(node, ctx, "%");
+    case "mod": {
+      // GLSL's % is integer-only; floats need the mod() builtin.
+      let operandType = (node.params![0] as any)?._t;
+      let isInteger = operandType === "int" || operandType === "uint";
+      return isInteger
+        ? binaryGLSL(node, ctx, "%")
+        : binaryGLSL(node, ctx, "mod", true);
+    }
     case "pow": return binaryGLSL(node, ctx, "pow", true);
     case "min": return binaryGLSL(node, ctx, "min", true);
     case "max": return binaryGLSL(node, ctx, "max", true);
@@ -1544,6 +1557,7 @@ function compileGLSLWithStage(
     wgslSamplers: new Map(),
     varDefs: new Map(),
     declared: new Set(),
+    wgslHelpers: new Set(),
     inFn: false,
     fragDepthUsed: false,
   };
@@ -1712,6 +1726,23 @@ function compileWGSLStage(
     case "construct": {
       let params = (node.params ?? []).map((p: any) => compileWGSLStage(p, ctx));
       let t = wgslType(node._t as string);
+
+      // GLSL truncates with vec3(someVec4); WGSL has no narrowing constructor,
+      // so the components are selected explicitly.
+      let target = TYPE_WIDTH[node._t as string];
+      let sourceType = (node.params?.[0] as any)?._t;
+      let source = TYPE_WIDTH[sourceType];
+      if (
+        params.length === 1 && target !== undefined && source !== undefined
+        && source > target && target > 1 && sourceType?.startsWith("vec")
+      ) {
+        return {
+          decls: params[0].decls,
+          body: params[0].body,
+          expr: `${params[0].expr}.${"xyzw".slice(0, target)}`,
+        };
+      }
+
       let args = wgslMatrixArgs(
         node._t as string,
         params.map((p: any) => p.expr),
@@ -1734,10 +1765,18 @@ function compileWGSLStage(
 
     case "uniform": {
       let v = node.value as any;
+      // WGSL restricts the uniform address space to host-shareable types, and
+      // bool is not one. GLSL allows `uniform bool`, so it is carried as u32
+      // and compared back on read — the difference stays inside the compiler.
+      let isBool = v?.shaderType === "bool";
       if (v && v.id != null && !ctx.uniforms.has(v.id)) {
-        ctx.uniforms.set(v.id, { type: wgslType(v.shaderType), slot: v.slot });
+        ctx.uniforms.set(v.id, {
+          type: isBool ? "u32" : wgslType(v.shaderType),
+          slot: v.slot,
+        });
       }
-      return { decls: [], body: [], expr: v?.slot || "uniform<f32>" };
+      if (!v?.slot) return { decls: [], body: [], expr: "uniform<f32>" };
+      return { decls: [], body: [], expr: isBool ? `(${v.slot} != 0u)` : v.slot };
     }
 
     case "attribute": {
@@ -1842,8 +1881,10 @@ function compileWGSLStage(
     case "bitAnd": return binaryWGSL(node, ctx, "&");
     case "bitOr": return binaryWGSL(node, ctx, "|");
     case "bitXor": return binaryWGSL(node, ctx, "^");
-    case "shiftLeft": return binaryWGSL(node, ctx, "<<");
-    case "shiftRight": return binaryWGSL(node, ctx, ">>");
+    // WGSL takes the shift amount as u32 even when the value shifted is i32,
+    // so the right operand is converted. GLSL accepts either.
+    case "shiftLeft": return shiftWGSL(node, ctx, "<<");
+    case "shiftRight": return shiftWGSL(node, ctx, ">>");
 
     case "matVecMul": {
       let mat = compileWGSLStage(node.params![0], ctx);
@@ -1884,7 +1925,19 @@ function compileWGSLStage(
     case "normalize": return unaryWGSL(node, ctx, "normalize");
     case "length": return unaryWGSL(node, ctx, "length");
     case "transpose": return unaryWGSL(node, ctx, "transpose");
-    case "inverse": return unaryWGSL(node, ctx, "inverse");
+    case "inverse": {
+      // No inverse() builtin in WGSL, so the helper is pulled in on demand.
+      let operand = compileWGSLStage(node.params![0], ctx);
+      let helper = (node.params![0] as any)?._t === "mat3"
+        ? "_rmsl_inverse3"
+        : "_rmsl_inverse4";
+      ctx.wgslHelpers.add(helper);
+      return {
+        decls: operand.decls,
+        body: operand.body,
+        expr: `${helper}(${operand.expr})`,
+      };
+    }
     case "fwidth": return unaryWGSL(node, ctx, "fwidth");
 
     case "matrixElement": {
@@ -2089,6 +2142,90 @@ function compileWGSLStage(
   }
 }
 
+/**
+ * A WGSL shift. The value keeps its own type, but the shift amount must be
+ * u32 — `i32 << i32` has no overload — so the right operand is converted when
+ * it is not already unsigned.
+ */
+/**
+ * WGSL helper functions, emitted only when a shader uses them.
+ *
+ * GLSL has `inverse()` as a builtin and WGSL does not, so the matrix inverses
+ * are written out here — cofactor expansion over a column-major matrix, the
+ * same formulation as the mat4Inverse used on the JS side.
+ */
+const WGSL_HELPERS: Record<string, string> = {
+  _rmsl_inverse3: `fn _rmsl_inverse3(m: mat3x3<f32>) -> mat3x3<f32> {
+  let a00 = m[0][0]; let a01 = m[0][1]; let a02 = m[0][2];
+  let a10 = m[1][0]; let a11 = m[1][1]; let a12 = m[1][2];
+  let a20 = m[2][0]; let a21 = m[2][1]; let a22 = m[2][2];
+  let b01 = a22 * a11 - a12 * a21;
+  let b11 = -a22 * a10 + a12 * a20;
+  let b21 = a21 * a10 - a11 * a20;
+  let det = a00 * b01 + a01 * b11 + a02 * b21;
+  let inv = 1.0 / det;
+  return mat3x3<f32>(
+    vec3<f32>(b01 * inv, (-a22 * a01 + a02 * a21) * inv, (a12 * a01 - a02 * a11) * inv),
+    vec3<f32>(b11 * inv, (a22 * a00 - a02 * a20) * inv, (-a12 * a00 + a02 * a10) * inv),
+    vec3<f32>(b21 * inv, (-a21 * a00 + a01 * a20) * inv, (a11 * a00 - a01 * a10) * inv),
+  );
+}`,
+  _rmsl_inverse4: `fn _rmsl_inverse4(m: mat4x4<f32>) -> mat4x4<f32> {
+  let a00 = m[0][0]; let a01 = m[0][1]; let a02 = m[0][2]; let a03 = m[0][3];
+  let a10 = m[1][0]; let a11 = m[1][1]; let a12 = m[1][2]; let a13 = m[1][3];
+  let a20 = m[2][0]; let a21 = m[2][1]; let a22 = m[2][2]; let a23 = m[2][3];
+  let a30 = m[3][0]; let a31 = m[3][1]; let a32 = m[3][2]; let a33 = m[3][3];
+  let b00 = a00 * a11 - a01 * a10;
+  let b01 = a00 * a12 - a02 * a10;
+  let b02 = a00 * a13 - a03 * a10;
+  let b03 = a01 * a12 - a02 * a11;
+  let b04 = a01 * a13 - a03 * a11;
+  let b05 = a02 * a13 - a03 * a12;
+  let b06 = a20 * a31 - a21 * a30;
+  let b07 = a20 * a32 - a22 * a30;
+  let b08 = a20 * a33 - a23 * a30;
+  let b09 = a21 * a32 - a22 * a31;
+  let b10 = a21 * a33 - a23 * a31;
+  let b11 = a22 * a33 - a23 * a32;
+  let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+  let inv = 1.0 / det;
+  return mat4x4<f32>(
+    vec4<f32>((a11 * b11 - a12 * b10 + a13 * b09) * inv,
+              (-a01 * b11 + a02 * b10 - a03 * b09) * inv,
+              (a31 * b05 - a32 * b04 + a33 * b03) * inv,
+              (-a21 * b05 + a22 * b04 - a23 * b03) * inv),
+    vec4<f32>((-a10 * b11 + a12 * b08 - a13 * b07) * inv,
+              (a00 * b11 - a02 * b08 + a03 * b07) * inv,
+              (-a30 * b05 + a32 * b02 - a33 * b01) * inv,
+              (a20 * b05 - a22 * b02 + a23 * b01) * inv),
+    vec4<f32>((a10 * b10 - a11 * b08 + a13 * b06) * inv,
+              (-a00 * b10 + a01 * b08 - a03 * b06) * inv,
+              (a30 * b04 - a31 * b02 + a33 * b00) * inv,
+              (-a20 * b04 + a21 * b02 - a23 * b00) * inv),
+    vec4<f32>((-a10 * b09 + a11 * b07 - a12 * b06) * inv,
+              (a00 * b09 - a01 * b07 + a02 * b06) * inv,
+              (-a30 * b03 + a31 * b01 - a32 * b00) * inv,
+              (a20 * b03 - a21 * b01 + a22 * b00) * inv),
+  );
+}`,
+};
+
+function shiftWGSL(
+  node: BaseNode<ShaderType>,
+  ctx: CompileCtx,
+  op: string,
+): { decls: string[]; body: string[]; expr: string } {
+  let lhs = compileWGSLStage(node.params![0], ctx);
+  let rhs = compileWGSLStage(node.params![1], ctx);
+  let amountType = (node.params![1] as any)?._t;
+  let amount = amountType === "uint" ? rhs.expr : `u32(${rhs.expr})`;
+  return {
+    decls: [...lhs.decls, ...rhs.decls],
+    body: [...lhs.body, ...rhs.body],
+    expr: `(${lhs.expr} ${op} ${amount})`,
+  };
+}
+
 function binaryWGSL(
   node: BaseNode<ShaderType>,
   ctx: CompileCtx,
@@ -2170,6 +2307,7 @@ function compileWGSLWithStage(
     wgslSamplers: new Map(),
     varDefs: new Map(),
     declared: new Set(),
+    wgslHelpers: new Set(),
     inFn: false,
     fragDepthUsed: false,
   };
@@ -2207,6 +2345,12 @@ function compileWGSLWithStage(
   });
   if (ctx.uniforms.size > 0 || ctx.wgslSamplers.size > 0 || ctx.outputs.size > 0) {
     lines.push("");
+  }
+
+  // Helpers standing in for GLSL builtins WGSL lacks. Sorted so identical
+  // shaders produce identical source regardless of the order ops were reached.
+  for (const helper of [...ctx.wgslHelpers].sort()) {
+    lines.push(WGSL_HELPERS[helper], "");
   }
 
   if (shaderStage === "vertex") {
@@ -2345,6 +2489,7 @@ function compileFnBody(
       wgslSamplers: new Map(),
       varDefs: new Map(),
       declared: new Set(),
+      wgslHelpers: new Set(),
       inFn: false,
       fragDepthUsed: false,
     };
@@ -2380,6 +2525,7 @@ function compileFnBody(
       wgslSamplers: new Map(),
       varDefs: new Map(),
       declared: new Set(),
+      wgslHelpers: new Set(),
       inFn: false,
       fragDepthUsed: false,
     };
