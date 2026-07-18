@@ -98,10 +98,10 @@ type Vec2Swizzles = {
  * saying what it supports.
  */
 interface NodeOps {
-  float: ArithOps<"float"> & FloatMathOps<"float"> & ComparisonOps<"bool">;
-  vec2: ArithOps<"vec2"> & FloatMathOps<"vec2"> & ComparisonOps<"bvec2"> & VecCommonOps<"vec2"> & Vec2Swizzles;
-  vec3: ArithOps<"vec3"> & FloatMathOps<"vec3"> & ComparisonOps<"bvec3"> & VecCommonOps<"vec3"> & Vec3Ops & Vec3Swizzles;
-  vec4: ArithOps<"vec4"> & FloatMathOps<"vec4"> & ComparisonOps<"bvec4"> & VecCommonOps<"vec4"> & Vec4Swizzles;
+  float: ArithOps<"float"> & FloatMathOps<"float"> & ComparisonOps<"bool", FloatLike>;
+  vec2: ArithOps<"vec2"> & FloatMathOps<"vec2"> & ComparisonOps<"bvec2", Vec2Like | FloatLike> & VecCommonOps<"vec2"> & Vec2Swizzles;
+  vec3: ArithOps<"vec3"> & FloatMathOps<"vec3"> & ComparisonOps<"bvec3", Vec3Like | FloatLike> & VecCommonOps<"vec3"> & Vec3Ops & Vec3Swizzles;
+  vec4: ArithOps<"vec4"> & FloatMathOps<"vec4"> & ComparisonOps<"bvec4", Vec4Like | FloatLike> & VecCommonOps<"vec4"> & Vec4Swizzles;
   int: IntOps;
   uint: UintOps;
   bool: BoolOps;
@@ -159,20 +159,29 @@ interface FloatMathOps<A extends ShaderType> {
 }
 
 /**
- * Component-wise comparisons, parameterised by their result type.
+ * Component-wise comparisons, parameterised by their result type and by what
+ * they accept.
+ *
+ * The operand is a parameter because the result width follows the wider of the
+ * two sides. A vector may be compared against a scalar — the scalar is
+ * broadcast, which is what the caller means — but a scalar compared against a
+ * vector would produce a boolean per component while the receiver's row here
+ * promises a single `bool`, so the two disagreed. Naming the operand per type
+ * makes that combination a type error rather than a node whose runtime type
+ * contradicts its declared one.
  *
  * Attached per concrete node type below rather than derived with a conditional:
  * resolving `Node<Conditional<A>>` for a generic `A` forces the checker to
  * expand the whole `Node` intersection at every call site, which exhausts its
  * heap.
  */
-interface ComparisonOps<R extends ShaderType> {
-  lessThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<R>;
-  greaterThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<R>;
-  lessThanEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<R>;
-  greaterThanEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<R>;
-  equal(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<R>;
-  notEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<R>;
+interface ComparisonOps<R extends ShaderType, Operand> {
+  lessThan(other: Operand): Node<R>;
+  greaterThan(other: Operand): Node<R>;
+  lessThanEqual(other: Operand): Node<R>;
+  greaterThanEqual(other: Operand): Node<R>;
+  equal(other: Operand): Node<R>;
+  notEqual(other: Operand): Node<R>;
 }
 
 interface VecCommonOps<A extends "vec2" | "vec3" | "vec4"> {

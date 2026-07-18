@@ -757,6 +757,32 @@ describe("RMSL", () => {
     expect(compileWGSL(prog())).toMatch(/vec3<f32>\(1, 2, 3\) < vec3<f32>\(\S+\)/);
   });
 
+  // "Is this float less than that vector" has no single boolean answer, and the
+  // compiler does not pretend otherwise: it widens the scalar and produces a
+  // bvec3. The signature said Node<"bool"> though, so the declared type and the
+  // node disagreed, and passing the result to If() emitted a boolean vector
+  // where GLSL wants a scalar condition. The type checker now refuses it.
+  //
+  // Verified by `pnpm type-check`: if the expression below ever type-checks,
+  // the unused directive is itself an error.
+  it("rejects comparing a scalar against a vector", () => {
+    let prog = Fn(() => {
+      let f = uniform("float");
+      let v = uniform("vec3");
+      // @ts-expect-error a float has no single comparison against a vec3
+      f.lessThan(v);
+      return vec4(1, 0, 0, 1);
+    });
+    expect(() => compileGLSL.fragment(prog())).not.toThrow();
+  });
+
+  // The other direction stays allowed: a vector compared against a scalar
+  // broadcasts, which is what the caller means and what both languages need.
+  it("still allows a vector compared against a scalar", () => {
+    let prog = Fn(() => vec3(1, 2, 3).lessThan(uniform("float")).all().toVar());
+    expect(compileGLSL(prog())).toContain("lessThan(");
+  });
+
   // step/smoothstep take the value last, so the result type follows that
   // operand rather than the edge — `vec3.step(0.5)` is a vec3, not a float.
   it("types step/smoothstep from the value, not the edge", () => {
