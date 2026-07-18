@@ -26,3 +26,8 @@ gitignore
 # System Files
 .DS_Store
 Thumbs.db
+
+# Mutation testing: .stryker-tmp holds a full copy of the repo per run, and
+# reports/ is regenerated output.
+.stryker-tmp/
+reports/

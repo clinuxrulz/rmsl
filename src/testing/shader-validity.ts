@@ -175,6 +175,18 @@ async function validateWGSL(items: Recorded[]): Promise<(string | null)[]> {
  * invalid shaders differs from `KNOWN_INVALID` in either direction.
  */
 export async function assertRecordedShadersValid(): Promise<void> {
+  // Mutation testing reruns the whole suite once per mutant, and launching a
+  // browser and a GPU device each time makes that intractable. Skipping is
+  // announced rather than silent, so a run without shader checking cannot be
+  // mistaken for one with it.
+  if (process.env.RMSL_SKIP_SHADER_VALIDATION) {
+    console.warn(
+      `[shader-validity] SKIPPED — RMSL_SKIP_SHADER_VALIDATION is set.`
+      + ` ${recorded.length} shaders were recorded but not compiled.`,
+    );
+    return;
+  }
+
   // An entry whose compiler threw has no source to hand a validator; it is
   // already accounted for below.
   const glsl = recorded.filter(r => r.lang === "glsl" && r.src !== null);

@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "pnpm",
+  "testRunner": "vitest",
+  "plugins": ["@stryker-mutator/vitest-runner"],
+  "reporters": ["html", "json", "clear-text", "progress"],
+  "coverageAnalysis": "perTest",
+  "mutate": ["src/rmsl.ts"],
+  "ignoreStatic": true,
+  "timeoutMS": 20000,
+  "concurrency": 4,
+  "_comment": [
+    "Mutation testing reruns the suite once per mutant. The shader-validity",
+    "harness launches a browser and a GPU device in afterAll, which takes the",
+    "suite from 0.3s to 14s — untenable across a thousand mutants — so it is",
+    "skipped here via RMSL_SKIP_SHADER_VALIDATION.",
+    "",
+    "That means the score measures the *assertions* only. Since those are",
+    "mostly substring matches, and since the shader validation is what caught",
+    "most of the real bugs on this branch, treat a surviving mutant as a",
+    "question — would the validator have killed it? — rather than a verdict."
+  ]
+}
