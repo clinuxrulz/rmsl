@@ -884,6 +884,13 @@ interface CompileCtx {
   outputs: Map<number, { type: string; slot: string; location: number }>;
   wgslSamplers: Map<string, { textureSlot: string; samplerSlot: string }>;
   varDefs: Map<string, string>;
+  /**
+   * Names already declared in the emitted source. A node graph can reach the
+   * same declaration through more than one root — `Fn` returning an array
+   * gives every element the whole block scope — and re-emitting it produces a
+   * redefinition error.
+   */
+  declared: Set<string>;
   inFn: boolean;
   fragDepthUsed: boolean;
 }
@@ -1198,7 +1205,14 @@ function compileGLSLStage(
 
     case "let": {
       let lhs = compileGLSLStage(node.params![0], ctx);
+      // Reached a second time: the variable already exists, so this is a
+      // reference. Compiling the initialiser again would repeat its side
+      // effects as well as redeclare the name.
+      if (ctx.declared.has(lhs.expr)) {
+        return { decls: [], body: [], expr: lhs.expr };
+      }
       let rhs = compileGLSLStage(node.params![1], ctx);
+      ctx.declared.add(lhs.expr);
       let vt = (node.params![0] as any)._t || "float";
       let rhsType = (node.params![1] as any)?._t || "float";
       let t = glslType(vt);
@@ -1431,6 +1445,7 @@ function compileGLSLWithStage(
     outputs: new Map(),
     wgslSamplers: new Map(),
     varDefs: new Map(),
+    declared: new Set(),
     inFn: false,
     fragDepthUsed: false,
   };
@@ -1771,7 +1786,11 @@ function compileWGSLStage(
 
     case "let": {
       let lhs = compileWGSLStage(node.params![0], ctx);
+      if (ctx.declared.has(lhs.expr)) {
+        return { decls: [], body: [], expr: lhs.expr };
+      }
       let rhs = compileWGSLStage(node.params![1], ctx);
+      ctx.declared.add(lhs.expr);
       let vt = (node.params![0] as any)._t || "float";
       let t = wgslType(vt);
       let varName = (node.params![0] as any).varName || lhs.expr;
@@ -1975,6 +1994,7 @@ function compileWGSLWithStage(
     outputs: new Map(),
     wgslSamplers: new Map(),
     varDefs: new Map(),
+    declared: new Set(),
     inFn: false,
     fragDepthUsed: false,
   };
@@ -2149,6 +2169,7 @@ function compileFnBody(
       outputs: new Map(),
       wgslSamplers: new Map(),
       varDefs: new Map(),
+      declared: new Set(),
       inFn: false,
       fragDepthUsed: false,
     };
@@ -2183,6 +2204,7 @@ function compileFnBody(
       outputs: new Map(),
       wgslSamplers: new Map(),
       varDefs: new Map(),
+      declared: new Set(),
       inFn: false,
       fragDepthUsed: false,
     };

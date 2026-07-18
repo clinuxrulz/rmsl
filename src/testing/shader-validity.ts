@@ -53,12 +53,6 @@ export const KNOWN_INVALID: Record<string, string> = {
   "glsl:RMSL > compiles vec3 equal/notEqual to GLSL":
     "vector comparison returns bvec3 but is declared bool",
 
-  // Two variables end up sharing a generated name.
-  "glsl:RMSL > supports Fn with multiple return values":
-    "generated variable name collides: redefinition",
-  "glsl:RMSL > types length/distance/dot as float, not the operand type":
-    "generated variable name collides: redefinition",
-
   // Backend-specific gaps, one shader each.
   "wgsl:RMSL > mat4 scalar constructor WGSL":
     "mat4(scalar) has no matching WGSL constructor",
