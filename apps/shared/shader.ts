@@ -61,12 +61,13 @@ export let calcColourAndDepth = Fn(() => {
     rd.assign(worldDir.xyz.normalize());
   });
 
+  // Compute ground intersection and its screen-space derivative (uniform control flow)
+  let p = ro.add(rd.mult(ro.y.negate().div(rd.y))).toVar();
+  let pFWidth = p.xz.fwidth().toVar();
+
   let colour = vec3(0.7, 0.7, 0.7).toVar();
   let outColor = output("vec4");
   let fragDepth = builtinFragDepth();
-
-  // Compute screen-space derivative of world position (uniform control flow)
-  let worldFWidth = positionWorldNode.xz.fwidth().toVar();
 
   let groundColour = vec3(0.7, 0.7, 0.7).toVar();
   let gridColour = vec3(0.5, 0.5, 0.5).toVar();
@@ -95,7 +96,6 @@ export let calcColourAndDepth = Fn(() => {
     If(rd.y.abs().lessThan(0.0001), () => {
       colour.assign(groundColour);
     }).Else(() => {
-      let p = ro.add(rd.mult(ro.y.negate().div(rd.y))).toVar();
       let refDist = float(1.0).toVar();
       If(isOrthographic, () => {
         refDist.assign(float(1.0).div(cameraProjectionMatrixNode.element(0).x.abs().max(float(0.001))));
@@ -104,8 +104,8 @@ export let calcColourAndDepth = Fn(() => {
       });
       let exponent = refDist.log().div(float(Math.log(10))).floor().clamp(-3, 6);
       let minorSize = float(10.0).pow(exponent);
-      let g1 = getGrid(minorSize, p, worldFWidth).toVar();
-      let g2 = getGrid(minorSize.mult(10.0), p, worldFWidth).toVar();
+      let g1 = getGrid(minorSize, p, pFWidth).toVar();
+      let g2 = getGrid(minorSize.mult(10.0), p, pFWidth).toVar();
       let fc = vec4(1.0, 1.0, 1.0, g2.mix(g1, g1).mult(fadeFactor)).toVar();
       let fca = fc.a.mult(0.5).mix(fc.a, g2);
       If(fca.lessThanEqual(0.0), () => {

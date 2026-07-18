@@ -1924,13 +1924,14 @@ function compileWGSLWithStage(
   let ubBinding = 0;
   let texBinding = 0;
   let samplerBinding = 0;
-  ctx.uniforms.forEach((info) => {
+  let sortedUniforms = [...ctx.uniforms.entries()].sort((a, b) => a[1].slot.localeCompare(b[1].slot));
+  for (let [, info] of sortedUniforms) {
     if (info.type === "texture_2d<f32>" || info.type === "texture_cube<f32>") {
       lines.push(`@group(1) @binding(${texBinding++}) var ${info.slot}: ${info.type};`);
     } else {
       lines.push(`@group(0) @binding(${ubBinding++}) var<uniform> ${info.slot}: ${info.type};`);
     }
-  });
+  }
   ctx.wgslSamplers.forEach((info) => {
     lines.push(`@group(2) @binding(${samplerBinding++}) var ${info.samplerSlot}: sampler;`);
   });
@@ -1951,9 +1952,10 @@ function compileWGSLWithStage(
     lines.push("struct VertexOutput {");
     lines.push("  @builtin(position) position: vec4<f32>,");
     let varyingLoc = 0;
-    ctx.varyings.forEach((info) => {
+    let sortedVaryings = [...ctx.varyings.entries()].sort((a, b) => a[1].slot.localeCompare(b[1].slot));
+    for (let [, info] of sortedVaryings) {
       lines.push(`  @location(${varyingLoc++}) ${info.slot}: ${info.type},`);
-    });
+    }
     ctx.outputs.forEach((info) => {
       if (info && info.location != null && info.slot && info.type) {
         lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
@@ -1994,10 +1996,11 @@ function compileWGSLWithStage(
     lines.push("@fragment");
     let fragParams = "";
     let fragVaryingLoc = 0;
-    ctx.varyings.forEach((info) => {
+    let sortedFVaryings = [...ctx.varyings.entries()].sort((a, b) => a[1].slot.localeCompare(b[1].slot));
+    for (let [, info] of sortedFVaryings) {
       if (fragParams) fragParams += ", ";
       fragParams += `@location(${fragVaryingLoc++}) ${info.slot}: ${info.type}`;
-    });
+    }
     lines.push(`fn main(${fragParams}) -> FragmentOutput {`);
     lines.push("  var result: FragmentOutput;");
     for (let line of allBody) {

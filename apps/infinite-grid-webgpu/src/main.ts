@@ -77,30 +77,28 @@ let vertexBuffer = device.createBuffer({
 });
 device.queue.writeBuffer(vertexBuffer, 0, quadVerts);
 
-let bindGroupLayout = device.createBindGroupLayout({
-  entries: [
-    { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-    { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-    { binding: 2, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-    { binding: 3, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-    { binding: 4, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-  ],
-});
+let uniformSizes = [64, 64, 64, 64, 16];
+let uniformBuffers = uniformSizes.map(size =>
+  device.createBuffer({
+    size,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  })
+);
 
-let uniformBuffer = device.createBuffer({
-  size: (16 * 4 + 3) * Float32Array.BYTES_PER_ELEMENT,
-  usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+let bindGroupLayout = device.createBindGroupLayout({
+  entries: uniformBuffers.map((_, i) => ({
+    binding: i,
+    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+    buffer: { type: "uniform" },
+  })),
 });
 
 let bindGroup = device.createBindGroup({
   layout: bindGroupLayout,
-  entries: [
-    { binding: 0, resource: { buffer: uniformBuffer } },
-    { binding: 1, resource: { buffer: uniformBuffer } },
-    { binding: 2, resource: { buffer: uniformBuffer } },
-    { binding: 3, resource: { buffer: uniformBuffer } },
-    { binding: 4, resource: { buffer: uniformBuffer } },
-  ],
+  entries: uniformBuffers.map((buf, i) => ({
+    binding: i,
+    resource: { buffer: buf },
+  })),
 });
 
 let pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
@@ -214,14 +212,11 @@ function render() {
   let world = mat4Inverse(view);
   let camPos = getCameraPosition();
 
-  let uniformData = new Float32Array(16 * 4 + 3);
-  uniformData.set(proj, 0);
-  uniformData.set(view, 16);
-  uniformData.set(projInv, 32);
-  uniformData.set(world, 48);
-  uniformData.set(new Float32Array(camPos), 64);
-
-  device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+  device.queue.writeBuffer(uniformBuffers[0], 0, proj);
+  device.queue.writeBuffer(uniformBuffers[1], 0, view);
+  device.queue.writeBuffer(uniformBuffers[2], 0, projInv);
+  device.queue.writeBuffer(uniformBuffers[3], 0, world);
+  device.queue.writeBuffer(uniformBuffers[4], 0, new Float32Array(camPos));
 
   let commandEncoder = device.createCommandEncoder();
   let renderPass = commandEncoder.beginRenderPass({
