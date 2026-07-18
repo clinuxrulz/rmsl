@@ -90,10 +90,23 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
     await expectValue((a) => a.clamp(0, 1), [0.25], 0.25);
   }, 60_000);
 
-  // mod is emitted as `%` for integers and mod() for floats in GLSL, and `%`
-  // in WGSL; the backends have to land on the same number regardless.
-  it("computes float modulus consistently across backends", async () => {
+  // Floored, following GLSL's mod() — the function this operation is named
+  // for — so the result takes the sign of the divisor. WGSL's % truncates
+  // instead, which agrees only while both operands are positive, and that is
+  // the one case a single test would have covered.
+  it("computes float modulus the same way on both backends", async () => {
     await expectValue((a, b) => a.mod(b), [7.5, 2], 1.5);
+    await expectValue((a, b) => a.mod(b), [-7.5, 2], 0.5);
+    await expectValue((a, b) => a.mod(b), [7.5, -2], -0.5);
+    await expectValue((a, b) => a.mod(b), [-1, 2], 1);
+  }, 60_000);
+
+  // Folding happens in JavaScript, whose % also truncates, so the literal path
+  // has to be corrected the same way or an expression changes meaning
+  // depending on whether its operands happen to be constants.
+  it("folds a modulus to what the shader would have computed", async () => {
+    await expectValue(() => float(-7.5).mod(float(2)), [], 0.5);
+    await expectValue((a, b) => a.mod(b), [-7.5, 2], 0.5);
   }, 60_000);
 
   it("folds constants to the same value it would compute at runtime", async () => {

@@ -1111,7 +1111,16 @@ function tryFold(n: BaseNode<ShaderType>): BaseNode<ShaderType> | null {
       case "mult": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (a * b) | 0 : a * b });
       case "div": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (a / b) | 0 : a / b });
       case "negate": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (-a) | 0 : -a });
-      case "mod": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (a % b) | 0 : a % b });
+      // JavaScript's % truncates toward zero. The float operation is floored,
+      // following GLSL's mod(), so folding it with % would give a literal that
+      // disagrees with what the same expression computes when its operands are
+      // not constants. The integer path keeps % because that is what both
+      // backends emit for integers.
+      case "mod": return mkNode({
+        _t: t,
+        type: t,
+        value: t === "int" || t === "uint" ? (a % b) | 0 : a - b * Math.floor(a / b),
+      });
       case "sin": return mkNode({ _t: t, type: t, value: Math.sin(a) });
       case "cos": return mkNode({ _t: t, type: t, value: Math.cos(a) });
       case "tan": return mkNode({ _t: t, type: t, value: Math.tan(a) });
@@ -2035,7 +2044,25 @@ function compileWGSLNode(
     case "sub": return binaryWGSL(node, ctx, "-");
     case "mult": return binaryWGSL(node, ctx, "*");
     case "div": return binaryWGSL(node, ctx, "/");
-    case "mod": return binaryWGSL(node, ctx, "%");
+    case "mod": {
+      let operandType = (node.params![0] as any)?._t;
+      if (operandType === "int" || operandType === "uint") {
+        return binaryWGSL(node, ctx, "%");
+      }
+      // WGSL's % truncates toward zero, GLSL's mod() floors, and floored is
+      // what this operation is named for — the result takes the sign of the
+      // divisor. Written out so both backends compute the same number for a
+      // negative operand. The operands are pure expressions, so repeating them
+      // is safe, and doing it inline keeps this usable inside a loop header
+      // where a bound temporary could not be emitted.
+      let lhs = compileWGSLStage(node.params![0], ctx);
+      let rhs = compileWGSLStage(node.params![1], ctx);
+      return {
+        decls: [...lhs.decls, ...rhs.decls],
+        body: [...lhs.body, ...rhs.body],
+        expr: `(${lhs.expr} - ${rhs.expr} * floor(${lhs.expr} / ${rhs.expr}))`,
+      };
+    }
     case "pow": return binaryWGSL(node, ctx, "pow", true);
     case "min": return binaryWGSL(node, ctx, "min", true);
     case "max": return binaryWGSL(node, ctx, "max", true);

@@ -64,6 +64,11 @@ they are what a component-wise comparison produces. See
 
 **Binary:** `.pow(e)`, `.min(other)`, `.max(other)`, `.mod(other)`
 
+`.mod()` on floats is floored, following GLSL's `mod()`, so the result takes the
+sign of the divisor: `float(-7.5).mod(float(2))` is `0.5`, not `-1.5`. On `int`
+and `uint` it is the `%` operator of each backend, which truncates toward zero
+and which GLSL leaves undefined when either operand is negative.
+
 **Interpolation:** `.mix(b, t)`, `.clamp(min, max)`, `.step(edge)`, `.smoothstep(edge0, edge1)`
 
 **Derivative:** `.fwidth()`
