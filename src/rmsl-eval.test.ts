@@ -20,7 +20,7 @@
  */
 
 import { describe, it, expect, afterAll } from "vitest";
-import { float, type Node } from "./rmsl";
+import { Fn, float, For, If, While, break_, continue_, type Node } from "./rmsl";
 import {
   evaluateBoth, closeEvaluators, FLOAT_TOLERANCE, EVALUATION_SKIPPED,
 } from "./testing/shader-eval";
@@ -91,5 +91,115 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
     // must agree, or folding is lying about what the shader would have done.
     await expectValue(() => float(7).div(float(2)), [], 3.5);
     await expectValue((a, b) => a.div(b), [7, 2], 3.5);
+  }, 60_000);
+
+  // === Control flow ===
+  //
+  // These were previously checked by matching the emitted loop header against a
+  // regex, which only works if you already know what the bug looks like. A sum
+  // pins the whole loop at once: it comes out right only if the loop starts,
+  // increments and stops correctly.
+  //
+  // `toVar()` and `If` need a block scope, which the standalone function
+  // compilers do not open, so each body is wrapped in `Fn(() => ...)()`.
+  //
+  // A loop that fails to advance does not fail — it hangs, and the timeout is
+  // what catches it. That is inherent: there is no way to test that a loop
+  // terminates without risking one that does not.
+
+  it("runs a for loop the right number of times", async () => {
+    const sumTo = (n: Node<"float">) => Fn(() => {
+      const total = float(0).toVar();
+      For(
+        () => float(0).toVar(),
+        (i) => i.lessThan(n),
+        (i) => i.assign(i.add(1)),
+        (i) => { total.assign(total.add(i)); },
+      );
+      return total;
+    })();
+
+    await expectValue(sumTo as any, [5], 10);   // 0+1+2+3+4
+    await expectValue(sumTo as any, [10], 45);
+    await expectValue(sumTo as any, [0], 0);    // condition false on entry
+  }, 60_000);
+
+  it("takes the branch the condition selects", async () => {
+    const branch = (x: Node<"float">) => Fn(() => {
+      const out = float(0).toVar();
+      If(x.greaterThan(1), () => { out.assign(float(10)); })
+        .Else(() => { out.assign(float(20)); });
+      return out;
+    })();
+
+    await expectValue(branch as any, [2], 10);
+    await expectValue(branch as any, [0], 20);
+  }, 60_000);
+
+  it("walks an if/else-if/else chain in order", async () => {
+    const classify = (x: Node<"float">) => Fn(() => {
+      const out = float(0).toVar();
+      If(x.lessThan(10), () => { out.assign(float(1)); })
+        .ElseIf(x.lessThan(20), () => { out.assign(float(2)); })
+        .Else(() => { out.assign(float(3)); });
+      return out;
+    })();
+
+    await expectValue(classify as any, [5], 1);
+    await expectValue(classify as any, [15], 2);
+    await expectValue(classify as any, [25], 3);
+  }, 60_000);
+
+  it("runs a while loop until its condition fails", async () => {
+    const countdown = (n: Node<"float">) => Fn(() => {
+      const left = n.toVar();
+      const steps = float(0).toVar();
+      While(left.greaterThan(0), () => {
+        left.assign(left.sub(1));
+        steps.assign(steps.add(1));
+      });
+      return steps;
+    })();
+
+    await expectValue(countdown as any, [4], 4);
+    await expectValue(countdown as any, [0], 0);
+  }, 60_000);
+
+  // break_ and continue_ change which iterations contribute, so the sum says
+  // whether they landed. continue_ inside a for loop emitted a malformed WGSL
+  // header until recently, and nothing checked what it computed.
+  it("honours break_ and continue_", async () => {
+    const sumUntilBreak = (limit: Node<"float">) => Fn(() => {
+      const total = float(0).toVar();
+      For(
+        () => float(0).toVar(),
+        (i) => i.lessThan(100),
+        (i) => i.assign(i.add(1)),
+        (i) => {
+          If(i.greaterThanEqual(limit), () => { break_(); });
+          total.assign(total.add(i));
+        },
+      );
+      return total;
+    })();
+
+    await expectValue(sumUntilBreak as any, [5], 10);  // stops before i === 5
+    await expectValue(sumUntilBreak as any, [1], 0);   // breaks immediately
+
+    const sumSkippingFirst = (n: Node<"float">) => Fn(() => {
+      const total = float(0).toVar();
+      For(
+        () => float(0).toVar(),
+        (i) => i.lessThan(n),
+        (i) => i.assign(i.add(1)),
+        (i) => {
+          If(i.lessThan(2), () => { continue_(); });
+          total.assign(total.add(i));
+        },
+      );
+      return total;
+    })();
+
+    await expectValue(sumSkippingFirst as any, [5], 9);  // 2+3+4, skipping 0,1
   }, 60_000);
 });
