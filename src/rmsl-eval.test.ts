@@ -22,7 +22,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { Fn, float, For, If, While, break_, continue_, type Node } from "./rmsl";
 import {
-  evaluateBoth, closeEvaluators, FLOAT_TOLERANCE, EVALUATION_SKIPPED,
+  evaluateBoth, closeEvaluators, floatTolerance, EVALUATION_SKIPPED,
 } from "./testing/shader-eval";
 
 afterAll(async () => {
@@ -31,12 +31,22 @@ afterAll(async () => {
 
 type Build = (...args: Node<"float">[]) => Node<"float">;
 
-/** Assert both backends compute `want`, and therefore agree with each other. */
+/**
+ * Assert both backends compute `want`, and therefore agree with each other.
+ *
+ * The tolerance scales with the magnitude being checked. A flat one fails on
+ * correct backends for large results — one unit in the last place at 1024 is
+ * already 1.2e-4 — while being far looser than needed near zero.
+ */
 async function expectValue(build: Build, args: number[], want: number) {
   const { glsl, wgsl } = await evaluateBoth(build, args);
-  expect(glsl, "GLSL result").toBeCloseTo(want, 4);
-  expect(wgsl, "WGSL result").toBeCloseTo(want, 4);
-  expect(Math.abs(glsl - wgsl), "backends disagree").toBeLessThan(FLOAT_TOLERANCE);
+  const tolerance = floatTolerance(want);
+  expect(Math.abs(glsl - want), `GLSL computed ${glsl}, wanted ${want}`)
+    .toBeLessThan(tolerance);
+  expect(Math.abs(wgsl - want), `WGSL computed ${wgsl}, wanted ${want}`)
+    .toBeLessThan(tolerance);
+  expect(Math.abs(glsl - wgsl), `backends disagree: ${glsl} vs ${wgsl}`)
+    .toBeLessThan(tolerance);
 }
 
 describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {

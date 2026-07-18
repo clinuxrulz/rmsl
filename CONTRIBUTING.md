@@ -51,16 +51,25 @@ computes the answer before codegen runs.
 Add a case here when operands could plausibly be emitted in the wrong order:
 `min`/`max`, the edge order in `step(edge, x)`.
 
-### Mutation testing
+### Skipping the GPU layers
+
+Both GPU-backed layers can be turned off, which is what makes a fast inner loop
+and a workable mutation run:
+
+| Variable | Turns off |
+|---|---|
+| `RMSL_SKIP_GPU` | both |
+| `RMSL_SKIP_SHADER_VALIDATION` | validity only |
+| `RMSL_SKIP_SHADER_EVALUATION` | evaluation only |
 
 ```bash
-RMSL_SKIP_SHADER_VALIDATION=1 npx stryker run
+pnpm test:fast     # RMSL_SKIP_GPU=1, well under a second
+pnpm test:mutate   # mutation testing with both layers off
 ```
 
-The flag is necessary — a browser and a GPU device per mutant is intractable —
-but it turns off the validity layer *and* the whole evaluation suite, so the
-score measures the text assertions alone. The same flag gives a sub-second inner
-loop; run the full suite before opening a pull request.
+Skipping is announced on stderr, because a run without these layers proves much
+less than it appears to — the score from a mutation run measures the text
+assertions alone. Run the full `pnpm test` before opening a pull request.
 
 ## Adding an operation
 

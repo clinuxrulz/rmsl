@@ -10,14 +10,18 @@
   "timeoutMS": 20000,
   "concurrency": 4,
   "_comment": [
-    "Mutation testing reruns the suite once per mutant. The shader-validity",
-    "harness launches a browser and a GPU device in afterAll, which takes the",
-    "suite from 0.3s to 14s — untenable across a thousand mutants — so it is",
-    "skipped here via RMSL_SKIP_SHADER_VALIDATION.",
+    "Run this with `pnpm test:mutate`, not `stryker run` directly.",
     "",
-    "That means the score measures the *assertions* only. Since those are",
-    "mostly substring matches, and since the shader validation is what caught",
-    "most of the real bugs on this branch, treat a surviving mutant as a",
-    "question — would the validator have killed it? — rather than a verdict."
+    "Mutation testing reruns the suite once per mutant. The two GPU-backed",
+    "layers launch a browser and a graphics device, which takes the suite from",
+    "well under a second to about ten — untenable across thousands of mutants.",
+    "The script sets RMSL_SKIP_GPU to turn both off. Stryker has no way to set",
+    "an environment variable from this file, so running the binary directly",
+    "pays that cost on every mutant.",
+    "",
+    "With them off the score measures the substring assertions alone. Since",
+    "the real compilers are what caught most of the actual bugs, treat a",
+    "surviving mutant as a question — would validation have killed it? —",
+    "rather than a verdict."
   ]
 }

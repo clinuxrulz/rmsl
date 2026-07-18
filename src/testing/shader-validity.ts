@@ -29,7 +29,12 @@ import { compileGLSL, compileWGSL } from "../rmsl";
 
 // This file only ever runs under vitest, in Node. Declared here rather than
 // depending on @types/node, which the package itself has no use for.
-declare const process: { env: Record<string, string | undefined> };
+// Written to rather than console.warn: vitest intercepts console output and
+// does not surface it here, so a warning sent that way is not seen at all.
+declare const process: {
+  env: Record<string, string | undefined>;
+  stderr: { write(message: string): void };
+};
 
 export type ShaderLang = "glsl" | "wgsl";
 export type ShaderStage = "vertex" | "fragment";
@@ -227,10 +232,10 @@ export async function assertRecordedShadersValid(): Promise<void> {
   // browser and a GPU device each time makes that intractable. Skipping is
   // announced rather than silent, so a run without shader checking cannot be
   // mistaken for one with it.
-  if (process.env.RMSL_SKIP_SHADER_VALIDATION) {
-    console.warn(
-      `[shader-validity] SKIPPED — RMSL_SKIP_SHADER_VALIDATION is set.`
-      + ` ${recorded.length} shaders were recorded but not compiled.`,
+  if (process.env.RMSL_SKIP_GPU || process.env.RMSL_SKIP_SHADER_VALIDATION) {
+    process.stderr.write(
+      `\n[shader-validity] SKIPPED — ${recorded.length} shaders were recorded`
+      + ` but never handed to a real compiler.\n`,
     );
     return;
   }

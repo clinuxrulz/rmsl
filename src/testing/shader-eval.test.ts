@@ -7,10 +7,48 @@
  */
 
 import { describe, it, expect, afterAll } from "vitest";
-import { runWGSL, closeEvaluators, EVALUATION_SKIPPED } from "./shader-eval";
+import {
+  runWGSL, closeEvaluators, floatTolerance, EVALUATION_SKIPPED,
+} from "./shader-eval";
 
 afterAll(async () => {
   await closeEvaluators();
+});
+
+describe("float tolerance", () => {
+  // A 32-bit float carries 24 bits of mantissa, so the gap between neighbouring
+  // representable values at |x| is about |x| * 2^-23. A tolerance below that is
+  // asking two independent GPU implementations to agree bit for bit, which they
+  // are under no obligation to do — pow is commonly evaluated as
+  // exp2(y * log2(x)) and lands a unit or two either side.
+  const ulp = (x: number) => Math.abs(x) * Math.pow(2, -23);
+
+  it("allows at least one unit in the last place, at every magnitude", () => {
+    for (const magnitude of [1, 10, 1024, 65536, 1e6]) {
+      expect(floatTolerance(magnitude), `magnitude ${magnitude}`)
+        .toBeGreaterThan(ulp(magnitude));
+    }
+  });
+
+  // The case that motivated this: pow(2, 10) is 1024, where one unit in the
+  // last place is 1.22e-4 — larger than the flat 1e-5 the harness used to
+  // allow, so a correct backend could fail.
+  it("is looser than a unit in the last place at 1024", () => {
+    expect(floatTolerance(1024)).toBeGreaterThan(1.22e-4);
+  });
+
+  // Near zero the relative gap collapses, so there has to be a floor.
+  it("stays usable near zero", () => {
+    expect(floatTolerance(0)).toBeGreaterThan(0);
+    expect(floatTolerance(0.001)).toBeGreaterThan(0);
+  });
+
+  // Loose enough to survive a driver, tight enough to catch a real mistake:
+  // it must not admit an off-by-one, and 1 versus 2 is the smallest of those.
+  it("stays tight enough to catch a wrong answer", () => {
+    expect(floatTolerance(1)).toBeLessThan(0.5);
+    expect(floatTolerance(1024)).toBeLessThan(0.5);
+  });
 });
 
 describe.skipIf(EVALUATION_SKIPPED)("WGSL evaluation harness", () => {

@@ -31,7 +31,9 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "test": "vitest run",
-    "test:setup": "playwright install chromium"
+    "test:setup": "playwright install chromium",
+    "test:fast": "RMSL_SKIP_GPU=1 vitest run",
+    "test:mutate": "RMSL_SKIP_GPU=1 stryker run"
   },
   "devDependencies": {
     "@kmamal/gpu": "^0.2.1",

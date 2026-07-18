@@ -21,10 +21,30 @@ import {
   compileGLSLFn, compileWGSLFn, type Node,
 } from "../rmsl";
 
-declare const process: { env: Record<string, string | undefined> };
+// Written to rather than console.warn: vitest intercepts console output and
+// does not surface it here, so a warning sent that way is not seen at all.
+declare const process: {
+  env: Record<string, string | undefined>;
+  stderr: { write(message: string): void };
+};
 
-/** Difference allowed between GPU f32 and JS f64 for the same arithmetic. */
-export const FLOAT_TOLERANCE = 1e-5;
+/**
+ * Difference allowed between two results of the same magnitude.
+ *
+ * A 32-bit float carries 24 bits of mantissa, so neighbouring representable
+ * values at |x| are about |x| * 2^-23 apart — at 1024 that is 1.2e-4, larger
+ * than any flat tolerance worth using. Two independent implementations are not
+ * obliged to agree bit for bit: `pow` is commonly evaluated as
+ * exp2(y * log2(x)) and lands a unit or two either side, so a fixed allowance
+ * either fails on correct backends at large magnitudes or waves through real
+ * mistakes at small ones.
+ *
+ * Scaling with magnitude gives roughly eight units in the last place, with a
+ * floor for values near zero where the relative gap collapses.
+ */
+export function floatTolerance(magnitude: number): number {
+  return Math.max(1e-6, Math.abs(magnitude) * 1e-6);
+}
 
 type Build = (...args: Node<"float">[]) => Node<"float">;
 
@@ -206,10 +226,32 @@ export async function evaluateBoth(
   return { glsl, wgsl };
 }
 
-/** Release the browser held open across evaluations. */
+/** Release the browser and the GPU device held open across evaluations. */
 export async function closeEvaluators(): Promise<void> {
   if (browser) { await browser.close(); browser = undefined; }
+  // The device holds native resources; leaving it open kept them alive for the
+  // rest of the process even though nothing could reach it any more.
+  if (device) { device.destroy?.(); device = undefined; }
 }
 
-/** Evaluation needs a GPU and a browser; the same escape hatch as validation. */
-export const EVALUATION_SKIPPED = !!process.env.RMSL_SKIP_SHADER_VALIDATION;
+/**
+ * Whether to skip the evaluation tests.
+ *
+ * Evaluation needs a GPU, and validation needs a browser, so both are worth
+ * skipping in a mutation run. They are separate switches because they check
+ * separate things: `RMSL_SKIP_GPU` turns off both, and each layer has its own
+ * flag for turning off just that one.
+ *
+ * Skipping is announced. This layer is the only thing checking what a shader
+ * computes rather than whether it compiles, so a run without it silently
+ * proves much less than it appears to.
+ */
+export const EVALUATION_SKIPPED =
+  !!process.env.RMSL_SKIP_GPU || !!process.env.RMSL_SKIP_SHADER_EVALUATION;
+
+if (EVALUATION_SKIPPED) {
+  process.stderr.write(
+    "\n[shader-eval] SKIPPED — nothing is checking what the shaders compute,"
+    + " only that they compile.\n",
+  );
+}
