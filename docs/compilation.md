@@ -70,22 +70,24 @@ void main(void) {
 
 `uniform("float")` produces `uniform float _rmsl_uN;` in both vertex and fragment shaders.
 
-You can access the generated name through the `.name` property:
+The returned node has a `.name` property for the generated name and `.node()` for method chaining:
 
 ```typescript
 let uTime = uniform("float");
-console.log(uTime.name); // outputs "_rmsl_u0"
+console.log(uTime.name);      // outputs "_rmsl_u0"
+let x = uTime.node().add(1.0); // use .node() for methods/swizzles
 ```
 
 ### Varyings
 
 `varying("vec3")` produces `out vec3 _rmsl_vN;` in vertex and `in vec3 _rmsl_vN;` in fragment.
 
-You can access the generated name through the `.name` property:
+Access `.name` for the generated name and `.node()` for method chaining:
 
 ```typescript
 let v = varying("vec3");
-console.log(v.name); // outputs "_rmsl_v0"
+console.log(v.name);       // outputs "_rmsl_v0"
+let x = v.node().x;        // use .node() for swizzles
 ```
 
 ## WGSL Output
@@ -125,11 +127,12 @@ fn main(input: VertexInput) -> VertexOutput {
 
 ### Attributes
 
-Attributes are declared in the `VertexInput` struct in WGSL:
+Attributes are declared in the `VertexInput` struct in WGSL. Use `.name` for the generated name and `.node()` for method chaining:
 
 ```typescript
 let pos = attribute("vec3");
-console.log(pos.name); // outputs "_rmsl_a0"
+console.log(pos.name);       // outputs "_rmsl_a0"
+let x = pos.node().x;        // use .node() for swizzles
 ```
 
 This produces:

@@ -23,10 +23,26 @@ importers:
 
   apps/infinite-grid:
     dependencies:
-      rmsl:
+      '@random-mesh/rmsl':
         specifier: workspace:*
         version: link:../..
     devDependencies:
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vite:
+        specifier: ^7.1.4
+        version: 7.3.6(@types/node@26.1.1)
+
+  apps/infinite-grid-webgpu:
+    dependencies:
+      '@random-mesh/rmsl':
+        specifier: workspace:*
+        version: link:../..
+    devDependencies:
+      '@webgpu/types':
+        specifier: ^0.1.71
+        version: 0.1.71
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
@@ -407,6 +423,9 @@ packages:
 
   '@volar/typescript@2.4.28':
     resolution: {integrity: sha512-Ja6yvWrbis2QtN4ClAKreeUZPVYMARDYZl9LMEv1iQ1QdepB6wn0jTRxA9MftYmYa4DQ4k/DaSZpFPUfxl8giw==}
+
+  '@webgpu/types@0.1.71':
+    resolution: {integrity: sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A==}
 
   acorn@8.17.0:
     resolution: {integrity: sha512-xRQbDb9BnwDafYNn6Vwl839DYVjqXYb1XVGtWAZ1kcDc6iwAL4hg3B1dZlRiuENFeO2H53gFG3in621AdERVAg==}
@@ -962,6 +981,8 @@ snapshots:
       '@volar/language-core': 2.4.28
       path-browserify: 1.0.1
       vscode-uri: 3.1.0
+
+  '@webgpu/types@0.1.71': {}
 
   acorn@8.17.0: {}
 

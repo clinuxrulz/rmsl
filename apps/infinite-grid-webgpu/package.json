@@ -1,5 +1,5 @@
 {
-  "name": "infinite-grid",
+  "name": "infinite-grid-webgpu",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,8 @@
     "@random-mesh/rmsl": "workspace:*"
   },
   "devDependencies": {
-    "vite": "^7.1.4",
-    "typescript": "^5.7.2"
+    "@webgpu/types": "^0.1.71",
+    "typescript": "^5.7.2",
+    "vite": "^7.1.4"
   }
 }

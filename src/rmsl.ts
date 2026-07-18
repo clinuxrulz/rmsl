@@ -22,15 +22,6 @@ export type Mat3Like = number[] | BaseNode<"mat3">;
 export type Mat4Like = number[] | BaseNode<"mat4">;
 export type Sampler2DLike = BaseNode<"sampler2D"> | Node<"sampler2D">;
 
-// === Typed node types with variable name access ===
-export interface VariableNode<A extends ShaderType> extends BaseNode<A> {
-  name: string;
-}
-
-export interface UniformNode<A extends ShaderType> extends VariableNode<A> {}
-export interface AttributeNode<A extends ShaderType> extends VariableNode<A> {}
-export interface VaryingNode<A extends ShaderType> extends VariableNode<A> {}
-
 // === BaseNode ===
 export interface BaseNode<A extends ShaderType> {
   [__brand]: A;
@@ -43,6 +34,7 @@ export interface BaseNode<A extends ShaderType> {
 // === Typed node types with variable name access ===
 export interface VariableNode<A extends ShaderType> extends BaseNode<A> {
   name: string;
+  node(): Node<A>;
 }
 
 export interface UniformNode<A extends ShaderType> extends VariableNode<A> {}
@@ -225,6 +217,10 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
     this.type = config.type;
     this.params = config.params;
     this.value = config.value;
+  }
+
+  node(): Node<A> {
+    return this as unknown as Node<A>;
   }
 
   // === ArithOps ===
@@ -429,9 +425,6 @@ function wrapValue<V>(x: V): Node<ExtractType<V>> {
     return node({ _t: "bool", type: "bool", value: x }) as any;
   }
   if (typeof x === "number") {
-    if (Number.isInteger(x)) {
-      return node({ _t: "int", type: "int", value: x }) as any;
-    }
     return node({ _t: "float", type: "float", value: x }) as any;
   }
   if (Array.isArray(x)) {
@@ -855,7 +848,7 @@ interface CompileCtx {
   varyings: Map<number, { type: string; slot: string }>;
   outputs: Map<number, { type: string; slot: string; location: number }>;
   wgslSamplers: Map<string, { textureSlot: string; samplerSlot: string }>;
-  varDefs: Set<string>;
+  varDefs: Map<string, string>;
   inFn: boolean;
   fragDepthUsed: boolean;
 }
@@ -980,7 +973,11 @@ function compileGLSLStage(
     }
 
     case "var": {
-      let varName = (node.value as any).varName;
+      let varInfo = (node.value as any);
+      let varName = varInfo?.varName;
+      if (varName && !ctx.varDefs.has(varName)) {
+        ctx.varDefs.set(varName, varInfo?.varType || "float");
+      }
       return { decls: [], body: [], expr: varName };
     }
 
@@ -1122,10 +1119,13 @@ function compileGLSLStage(
     case "matrixElement": {
       let mat = compileGLSLStage(node.params![0], ctx);
       let idx = compileGLSLStage(node.params![1], ctx);
+      let idxExpr = idx.expr;
+      let idxType = (node.params![1] as any)?._t || "float";
+      if (idxType === "float") idxExpr = `int(${idxExpr})`;
       return {
         decls: [...mat.decls, ...idx.decls],
         body: [...mat.body, ...idx.body],
-        expr: `${mat.expr}[${idx.expr}]`,
+        expr: `${mat.expr}[${idxExpr}]`,
       };
     }
 
@@ -1372,7 +1372,7 @@ function compileGLSLWithStage(
     varyings: new Map(),
     outputs: new Map(),
     wgslSamplers: new Map(),
-    varDefs: new Set(),
+    varDefs: new Map(),
     inFn: false,
     fragDepthUsed: false,
   };
@@ -1405,7 +1405,9 @@ function compileGLSLWithStage(
     }
   });
   ctx.outputs.forEach((info) => {
-    lines.push(`layout(location=${info.location}) out ${info.type} ${info.slot};`);
+    if (info && info.location != null && info.slot && info.type) {
+      lines.push(`layout(location=${info.location}) out ${info.type} ${info.slot};`);
+    }
   });
   if (ctx.uniforms.size > 0 || ctx.attributes.size > 0 || ctx.outputs.size > 0) {
     lines.push("");
@@ -1426,8 +1428,10 @@ function compileGLSLWithStage(
       lines.push("  " + line);
     }
     if (ctx.outputs.size > 0) {
-      ctx.outputs.forEach((info, id) => {
-        lines.push(`  ${info.slot} = ${lastExpr};`);
+      ctx.outputs.forEach((info) => {
+        if (info && info.slot && info.type) {
+          lines.push(`  ${info.slot} = ${lastExpr};`);
+        }
       });
     }
     lines.push("}");
@@ -1514,21 +1518,25 @@ function compileWGSLStage(
     }
 
     case "var": {
-      let varName = (node.value as any).varName;
+      let varInfo = (node.value as any);
+      let varName = varInfo?.varName;
+      if (varName && !ctx.varDefs.has(varName)) {
+        ctx.varDefs.set(varName, wgslType(varInfo?.varType || "float"));
+      }
       return { decls: [], body: [], expr: varName };
     }
 
     case "uniform": {
       let v = node.value as any;
-      if (!ctx.uniforms.has(v.id)) {
+      if (v && v.id != null && !ctx.uniforms.has(v.id)) {
         ctx.uniforms.set(v.id, { type: wgslType(v.shaderType), slot: v.slot });
       }
-      return { decls: [], body: [], expr: v.slot };
+      return { decls: [], body: [], expr: v?.slot || "uniform<f32>" };
     }
 
     case "attribute": {
       let v = node.value as any;
-      if (!ctx.attributes.has(v.id)) {
+      if (v && v.id != null && !ctx.attributes.has(v.id)) {
         ctx.attributes.set(v.id, { type: wgslType(v.shaderType), slot: v.slot });
       }
       return { decls: [], body: [], expr: ctx.shaderStage === "vertex" ? `input.${v.slot}` : v.slot };
@@ -1536,18 +1544,20 @@ function compileWGSLStage(
 
     case "varying": {
       let v = node.value as any;
-      if (!ctx.varyings.has(v.id)) {
+      if (v && v.id != null && !ctx.varyings.has(v.id)) {
         ctx.varyings.set(v.id, { type: wgslType(v.shaderType), slot: v.slot });
       }
-      return { decls: [], body: [], expr: v.slot };
+      let slot = v?.slot || "vec3<f32>(0.0, 0.0, 0.0)";
+      let expr = ctx.shaderStage === "vertex" ? `result.${slot}` : slot;
+      return { decls: [], body: [], expr };
     }
 
     case "output": {
       let v = node.value as any;
-      if (!ctx.outputs.has(v.id)) {
+      if (v && v.id != null && !ctx.outputs.has(v.id)) {
         ctx.outputs.set(v.id, { type: wgslType(v.shaderType), slot: v.slot, location: v.location });
       }
-      return { decls: [], body: [], expr: v.slot };
+      return { decls: [], body: [], expr: `result.${v?.slot}` };
     }
 
     case "builtinPosition": {
@@ -1559,7 +1569,7 @@ function compileWGSLStage(
         throw new Error("builtinFragDepth() can only be used in fragment shaders");
       }
       ctx.fragDepthUsed = true;
-      return { decls: ["var _rmsl_fragDepth: f32 = 1.0;"], body: [], expr: "_rmsl_fragDepth" };
+      return { decls: [], body: [], expr: "result._rmsl_fragDepth" };
     }
 
     case "swizzle": {
@@ -1655,10 +1665,13 @@ function compileWGSLStage(
     case "matrixElement": {
       let mat = compileWGSLStage(node.params![0], ctx);
       let idx = compileWGSLStage(node.params![1], ctx);
+      let idxExpr = idx.expr;
+      let idxType = (node.params![1] as any)?._t || "float";
+      if (idxType === "float") idxExpr = `i32(${idxExpr})`;
       return {
         decls: [...mat.decls, ...idx.decls],
         body: [...mat.body, ...idx.body],
-        expr: `${mat.expr}[${idx.expr}]`,
+        expr: `${mat.expr}[${idxExpr}]`,
       };
     }
 
@@ -1696,10 +1709,12 @@ function compileWGSLStage(
       let rhs = compileWGSLStage(node.params![1], ctx);
       let vt = (node.params![0] as any)._t || "float";
       let t = wgslType(vt);
+      let varName = (node.params![0] as any).varName || lhs.expr;
+      ctx.varDefs.set(varName, t);
       return {
         decls: [...lhs.decls, ...rhs.decls],
-        body: [...lhs.body, ...rhs.body, `let ${lhs.expr}: ${t} = ${rhs.expr};`],
-        expr: lhs.expr,
+        body: [...lhs.body, ...rhs.body, `var ${varName}: ${t} = ${rhs.expr};`],
+        expr: varName,
       };
     }
 
@@ -1891,7 +1906,7 @@ function compileWGSLWithStage(
     varyings: new Map(),
     outputs: new Map(),
     wgslSamplers: new Map(),
-    varDefs: new Set(),
+    varDefs: new Map(),
     inFn: false,
     fragDepthUsed: false,
   };
@@ -1940,7 +1955,9 @@ function compileWGSLWithStage(
       lines.push(`  @location(${varyingLoc++}) ${info.slot}: ${info.type},`);
     });
     ctx.outputs.forEach((info) => {
-      lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
+      if (info && info.location != null && info.slot && info.type) {
+        lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
+      }
     });
     lines.push("};");
     lines.push("");
@@ -1950,19 +1967,21 @@ function compileWGSLWithStage(
     } else {
       lines.push("fn main() -> VertexOutput {");
     }
+    lines.push("  var result: VertexOutput;");
     for (let line of allBody) {
       lines.push("  " + line);
     }
     if (lastExpr !== "0.0") {
-      lines.push(`  return VertexOutput(${lastExpr});`);
-    } else {
-      lines.push("  return VertexOutput();");
+      lines.push(`  result.position = ${lastExpr};`);
     }
+    lines.push("  return result;");
     lines.push("}");
   } else {
     lines.push("struct FragmentOutput {");
     ctx.outputs.forEach((info) => {
-      lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
+      if (info && info.location != null && info.slot && info.type) {
+        lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
+      }
     });
     if (ctx.outputs.size === 0) {
       lines.push("  @location(0) _rmsl_fragColor: vec4<f32>,");
@@ -1973,23 +1992,24 @@ function compileWGSLWithStage(
     lines.push("};");
     lines.push("");
     lines.push("@fragment");
-    lines.push("fn main() -> FragmentOutput {");
+    let fragParams = "";
+    let fragVaryingLoc = 0;
+    ctx.varyings.forEach((info) => {
+      if (fragParams) fragParams += ", ";
+      fragParams += `@location(${fragVaryingLoc++}) ${info.slot}: ${info.type}`;
+    });
+    lines.push(`fn main(${fragParams}) -> FragmentOutput {`);
+    lines.push("  var result: FragmentOutput;");
     for (let line of allBody) {
       lines.push("  " + line);
     }
-    if (lastExpr !== "0.0") {
-      if (ctx.fragDepthUsed) {
-        lines.push(`  return FragmentOutput(${lastExpr}, _rmsl_fragDepth);`);
-      } else {
-        lines.push(`  return FragmentOutput(${lastExpr});`);
-      }
-    } else {
-      if (ctx.fragDepthUsed) {
-        lines.push("  return FragmentOutput(0.0, _rmsl_fragDepth);");
-      } else {
-        lines.push("  return FragmentOutput();");
-      }
+    if (ctx.outputs.size === 0 && lastExpr !== "0.0") {
+      lines.push(`  result._rmsl_fragColor = ${lastExpr};`);
     }
+    if (ctx.fragDepthUsed && !allBody.some(l => l.includes("_rmsl_fragDepth ="))) {
+      lines.push("  result._rmsl_fragDepth = 1.0;");
+    }
+    lines.push("  return result;");
     lines.push("}");
   }
   return lines.join("\n");

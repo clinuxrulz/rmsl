@@ -33,7 +33,7 @@ describe("RMSL", () => {
     let prog = Fn(() => {
       let uTime = uniform("float");
       let uColor = uniform("vec3");
-      return uTime.add(uColor.x);
+      return uTime.node().add(uColor.node().x);
     });
     let glsl = compileGLSL(prog());
     expect(glsl).toContain("uniform float");
@@ -177,7 +177,7 @@ describe("RMSL", () => {
   it("compiles texture sampling to GLSL", () => {
     let prog = Fn(() => {
       let tex = uniform("sampler2D");
-      return tex.texture(vec2(0.5, 0.5)).toVar();
+      return tex.node().texture(vec2(0.5, 0.5)).toVar();
     });
     let glsl = compileGLSL(prog());
     expect(glsl).toContain("uniform sampler2D");
@@ -187,7 +187,7 @@ describe("RMSL", () => {
   it("compiles texture sampling to WGSL", () => {
     let prog = Fn(() => {
       let tex = uniform("sampler2D");
-      return tex.texture(vec2(0.5, 0.5)).toVar();
+      return tex.node().texture(vec2(0.5, 0.5)).toVar();
     });
     let wgsl = compileWGSL(prog());
     expect(wgsl).toContain("texture_2d<f32>");
@@ -197,7 +197,7 @@ describe("RMSL", () => {
   it("compiles textureLod to GLSL", () => {
     let prog = Fn(() => {
       let tex = uniform("sampler2D");
-      return tex.textureLod(vec2(0.5, 0.5), float(0.0)).toVar();
+      return tex.node().textureLod(vec2(0.5, 0.5), float(0.0)).toVar();
     });
     let glsl = compileGLSL(prog());
     expect(glsl).toContain("textureLod(");
@@ -276,7 +276,7 @@ describe("RMSL", () => {
     let prog = Fn(() => {
       let mvp = uniform("mat4");
       let pos = attribute("vec3");
-      return mvp.multVec(pos);
+      return mvp.node().multVec(pos.node());
     });
     let glsl = compileGLSL.vertex(prog());
     expect(glsl).toContain("gl_Position");
@@ -377,7 +377,7 @@ describe("RMSL", () => {
   it("varying is out in vertex, in in fragment GLSL", () => {
     let prog = Fn(() => {
       let v = varying("vec3");
-      return v.x;
+      return v.node().x;
     });
     let vertexGLSL = compileGLSL.vertex(prog());
     let fragmentGLSL = compileGLSL.fragment(prog());
@@ -404,7 +404,7 @@ describe("RMSL", () => {
     let prog = Fn(() => {
       let pos = attribute("vec3");
       let mvp = uniform("mat4");
-      return mvp.multVec(pos);
+      return mvp.node().multVec(pos.node());
     });
     let wgsl = compileWGSL.vertex(prog());
     expect(wgsl).toContain("struct VertexInput");
@@ -416,7 +416,7 @@ describe("RMSL", () => {
     let prog = Fn(() => {
       let u = uniform("float");
       let tex = uniform("sampler2D");
-      return tex.texture(vec2(0, 0)).add(u);
+      return tex.node().texture(vec2(0, 0)).add(u.node());
     });
     let wgsl = compileWGSL.fragment(prog());
     expect(wgsl).toContain("@group(0) @binding(0) var<uniform>");
@@ -424,13 +424,14 @@ describe("RMSL", () => {
     expect(wgsl).toContain("@group(2) @binding(0) var ");
   });
 
-  it("WGSL coerces int literal to f32 in float context", () => {
+  it("plain number literals are float in WGSL", () => {
     let prog = Fn(() => {
       let x = float(5).toVar();
       return x.mod(2).toVar();
     });
     let wgsl = compileWGSL(prog());
-    expect(wgsl).toContain("f32(");
+    expect(wgsl).toContain("2f");
+    expect(wgsl).not.toContain("f32(");
   });
 
   // === Phase 5: Node System Gaps ===

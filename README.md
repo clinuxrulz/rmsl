@@ -11,7 +11,7 @@ import { Fn, float, vec4, uniform, compileGLSL, compileWGSL } from "rmsl";
 let prog = Fn(() => {
   let color = uniform("vec4");
   let brightness = float(0.5).toVar();
-  return color.mult(brightness).toVar();
+  return color.node().mult(brightness).toVar();
 });
 
 let glsl = compileGLSL(prog());
