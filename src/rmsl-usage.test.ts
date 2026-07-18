@@ -1592,6 +1592,34 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     }
   });
 
+  // The location came from a module-wide counter, so the fifth output declared
+  // anywhere landed at location 4 even in a shader that had only one — past
+  // MAX_DRAW_BUFFERS soon enough for an app with a few materials.
+  it("numbers output locations per shader", () => {
+    for (let i = 0; i < 6; i++) {
+      let prog = Fn(() => {
+        let o = output("vec4");
+        o.assign(vec4(1, 0, 0, 1));
+        return o;
+      });
+      expect(compileGLSL(prog()), `shader ${i}`).toContain("layout(location=0) out");
+      expect(compileWGSL(prog()), `shader ${i}`).toMatch(/@location\(0\) _rmsl_o\d+/);
+    }
+  });
+
+  it("still numbers several outputs in one shader in order", () => {
+    let prog = Fn(() => {
+      let a = output("vec4");
+      let b = output("vec4");
+      a.assign(vec4(1, 0, 0, 1));
+      b.assign(vec4(0, 1, 0, 1));
+      return b;
+    });
+    let glsl = compileGLSL(prog());
+    expect(glsl).toContain("layout(location=0) out");
+    expect(glsl).toContain("layout(location=1) out");
+  });
+
   it("rejects a nonsensical array length", () => {
     expect(() => uniformArray("vec4", 0)).toThrow(/positive integer/);
     expect(() => uniformArray("vec4", -3)).toThrow(/positive integer/);

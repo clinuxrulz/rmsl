@@ -2009,9 +2009,14 @@ function compileGLSLWithStage(
       lines.push(`in ${info.type} ${info.slot};`);
     }
   });
+  // Numbered per shader, not from the id the output was declared with. That id
+  // is a module-wide counter, so the fifth output declared anywhere landed at
+  // location 4 even in a shader that had only one — past MAX_DRAW_BUFFERS soon
+  // enough for an app with a few materials.
+  let outputLocation = 0;
   ctx.outputs.forEach((info) => {
-    if (info && info.location != null && info.slot && info.type) {
-      lines.push(`layout(location=${info.location}) out ${info.type} ${info.slot};`);
+    if (info && info.slot && info.type) {
+      lines.push(`layout(location=${outputLocation++}) out ${info.type} ${info.slot};`);
     }
   });
   if (emitImplicitColor) {
@@ -3112,9 +3117,11 @@ function compileWGSLWithStage(
     for (let [, info] of sortedVaryings) {
       lines.push(`  @location(${varyingLoc++}) ${info.slot}: ${info.type},`);
     }
+    // Numbered per shader, as in the GLSL branch.
+    let vertexOutputLocation = 0;
     ctx.outputs.forEach((info) => {
-      if (info && info.location != null && info.slot && info.type) {
-        lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
+      if (info && info.slot && info.type) {
+        lines.push(`  @location(${vertexOutputLocation++}) ${info.slot}: ${info.type},`);
       }
     });
     lines.push("};");
@@ -3144,9 +3151,12 @@ function compileWGSLWithStage(
 
     if (hasFragmentOutput) {
       lines.push("struct FragmentOutput {");
+      // Numbered per shader. The implicit colour below takes location 0, and
+      // only exists when there are no declared outputs, so the two cannot clash.
+      let fragmentOutputLocation = 0;
       ctx.outputs.forEach((info) => {
-        if (info && info.location != null && info.slot && info.type) {
-          lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
+        if (info && info.slot && info.type) {
+          lines.push(`  @location(${fragmentOutputLocation++}) ${info.slot}: ${info.type},`);
         }
       });
       if (emitImplicitColor) {
