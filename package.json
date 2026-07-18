@@ -1,6 +1,17 @@
 {
   "name": "@random-mesh/rmsl",
   "version": "1.0.3",
+  "keywords": [
+    "shader",
+    "dsl",
+    "glsl",
+    "wgsl",
+    "webgpu",
+    "webgl",
+    "gpu",
+    "node-graph",
+    "typescript"
+  ],
   "type": "module",
   "main": "./dist/rmsl.js",
   "types": "./dist/rmsl.d.ts",
