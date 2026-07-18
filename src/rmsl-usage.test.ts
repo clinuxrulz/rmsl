@@ -546,7 +546,11 @@ describe("RMSL", () => {
       return a;
     });
     let wgsl = compileWGSL(prog());
-    expect(wgsl).toContain(".xy = ");
+    // WGSL cannot assign to a multi-component swizzle, so the write is split
+    // into one assignment per component.
+    expect(wgsl).toContain(".x = ");
+    expect(wgsl).toContain(".y = ");
+    expect(wgsl).not.toContain(".xy = ");
   });
 
   it("break_ compiles in GLSL", () => {

@@ -974,7 +974,10 @@ function forUpdateExpr(
   update: { body: string[]; expr: string },
   form: "comma" | "single",
 ): string {
-  if (update.body.length === 0) return update.expr;
+  // "0.0" is the compiler's stand-in for "no value". WGSL requires the update
+  // slot to be a statement, so a bare literal there is a parse error; both
+  // grammars accept the slot being empty instead.
+  if (update.body.length === 0) return update.expr === "0.0" ? "" : update.expr;
   let statements = update.body.map(s => s.endsWith(";") ? s.slice(0, -1) : s);
   return form === "comma" ? statements.join(", ") : statements[statements.length - 1];
 }
@@ -1542,6 +1545,30 @@ let typeToWGSL: Record<string, string> = {
   void: "void",
 };
 
+/** Column/row counts for WGSL's square matrix types. */
+const MATRIX_DIMENSIONS: Record<string, number> = {
+  mat2: 2, mat3: 3, mat4: 4,
+};
+
+/**
+ * Expand a single-scalar matrix constructor for WGSL.
+ *
+ * GLSL reads `mat4(1.0)` as a diagonal — the identity scaled by the scalar.
+ * WGSL has no such overload and requires every component, so the one argument
+ * is written out as the full diagonal. Any other argument count is already
+ * component-wise and passes through.
+ */
+function wgslMatrixArgs(type: string, args: string[]): string[] {
+  let size = MATRIX_DIMENSIONS[type];
+  if (size === undefined || args.length !== 1) return args;
+  let scalar = args[0];
+  let out: string[] = [];
+  for (let col = 0; col < size; col++) {
+    for (let row = 0; row < size; row++) out.push(row === col ? scalar : "0f");
+  }
+  return out;
+}
+
 function wgslType(brand: any): string {
   return typeToWGSL[brand as string] ?? "f32";
 }
@@ -1589,7 +1616,10 @@ function compileWGSLStage(
     case "construct": {
       let params = (node.params ?? []).map((p: any) => compileWGSLStage(p, ctx));
       let t = wgslType(node._t as string);
-      let args = params.map((p: any) => p.expr).join(", ");
+      let args = wgslMatrixArgs(
+        node._t as string,
+        params.map((p: any) => p.expr),
+      ).join(", ");
       return {
         decls: params.flatMap((p: any) => p.decls),
         body: params.flatMap((p: any) => p.body),
@@ -1641,7 +1671,15 @@ function compileWGSLStage(
     }
 
     case "builtinPosition": {
-      return { decls: [], body: [], expr: "position" };
+      // WGSL has no free-standing `position`: in a vertex stage it is a member
+      // of the output struct, and in a fragment stage it arrives as a
+      // parameter. GLSL's single readable/writable gl_Position has no direct
+      // equivalent, so the vertex stage resolves to the struct member.
+      return {
+        decls: [],
+        body: [],
+        expr: ctx.shaderStage === "vertex" ? "result.position" : "position",
+      };
     }
 
     case "builtinFragDepth": {
@@ -1805,6 +1843,36 @@ function compileWGSLStage(
     case "assign": {
       let lhs = compileWGSLStage(node.params![0], ctx);
       let rhs = compileWGSLStage(node.params![1], ctx);
+
+      // WGSL only makes a single component assignable: `v.x = e` is a
+      // reference, but a multi-component swizzle like `v.xy` is a value, so
+      // `v.xy = e` is rejected. GLSL allows it, so the write is split into one
+      // assignment per component. The right-hand side is bound to a temporary
+      // first, otherwise an expression with side effects would run once per
+      // component.
+      let target = node.params![0] as any;
+      let pattern: string | undefined =
+        target?.type === "swizzle" ? (target.value as string) : undefined;
+
+      if (pattern && pattern.length > 1) {
+        let base = compileWGSLStage(target.params![0], ctx);
+        let temp = `_rmsl_sw${ctx.nextId++}`;
+        let rhsType = wgslType((node.params![1] as any)?._t ?? "float");
+        let lines = [
+          ...base.body,
+          ...rhs.body,
+          `var ${temp}: ${rhsType} = ${rhs.expr};`,
+          ...[...pattern].map(
+            (component, i) => `${base.expr}.${component} = ${temp}[${i}];`,
+          ),
+        ];
+        return {
+          decls: [...base.decls, ...rhs.decls],
+          body: lines,
+          expr: base.expr,
+        };
+      }
+
       return {
         decls: [...lhs.decls, ...rhs.decls],
         body: [...lhs.body, ...rhs.body, `${lhs.expr} = ${rhs.expr};`],

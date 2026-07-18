@@ -53,15 +53,6 @@ export const KNOWN_INVALID: Record<string, string> = {
   "glsl:RMSL > compiles vec3 equal/notEqual to GLSL":
     "vector comparison returns bvec3 but is declared bool",
 
-  // Backend-specific gaps, one shader each.
-  "wgsl:RMSL > mat4 scalar constructor WGSL":
-    "mat4(scalar) has no matching WGSL constructor",
-  "wgsl:RMSL > builtinPosition() maps to position in WGSL vertex":
-    "builtinPosition emits an unresolved `position` in WGSL",
-  "wgsl:RMSL > continue_ compiles in WGSL":
-    "continue_ inside For emits a malformed WGSL loop header",
-  "wgsl:RMSL > swizzle write via assign works in WGSL":
-    "swizzle write targets a value rather than a reference in WGSL",
 };
 
 function record(lang: ShaderLang, stage: ShaderStage, src: string): string {
