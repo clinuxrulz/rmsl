@@ -45,42 +45,6 @@ const recorded: Recorded[] = [];
  * the problems it documents.
  */
 export const KNOWN_INVALID: Record<string, string> = {
-  // The WGSL fragment wrapper assigns the final expression to a vec4 output
-  // without checking its type, so any shader not ending in a vec4 emits
-  // `result._rmsl_fragColor = <non-vec4>`. GLSL emits no assignment at all in
-  // the same situation, so the two backends disagree about this input.
-  "wgsl:RMSL > compiles a simple float expression to WGSL":
-    "WGSL fragment output takes any type: f32 -> vec4<f32>",
-  "wgsl:RMSL > compiles vec3 swizzles in WGSL":
-    "WGSL fragment output takes any type: vec3<f32> -> vec4<f32>",
-  "wgsl:RMSL > compiles float lessThan to WGSL":
-    "WGSL fragment output takes any type: bool -> vec4<f32>",
-  "wgsl:RMSL > compiles refract with all three arguments to WGSL":
-    "WGSL fragment output takes any type: vec3<f32> -> vec4<f32>",
-  "wgsl:RMSL > emits the for-loop update clause in WGSL":
-    "WGSL fragment output takes any type: f32 -> vec4<f32>",
-  "wgsl:RMSL > vec3 scalar promotion WGSL":
-    "WGSL fragment output takes any type: vec3<f32> -> vec4<f32>",
-  "wgsl:RMSL > compileWGSL.fragment emits @fragment and FragmentOutput":
-    "WGSL fragment output takes any type: f32 -> vec4<f32>",
-  "wgsl:RMSL > builtinFragDepth() maps to @builtin(frag_depth) in WGSL fragment":
-    "WGSL fragment output takes any type: f32 -> vec4<f32>",
-  "wgsl:RMSL > WGSL vertex has VertexInput struct with attributes":
-    "WGSL fragment output takes any type: vec3<f32> -> vec4<f32>",
-  "wgsl:RMSL > plain number literals are float in WGSL":
-    "WGSL fragment output takes any type: f32 -> vec4<f32>",
-  "wgsl:RMSL > int/uint/bool/vec2 literals compile to WGSL":
-    "WGSL fragment output takes any type: i32 -> vec4<f32>",
-  "wgsl:RMSL > discard compiles to WGSL":
-    "WGSL fragment output takes any type: f32 -> vec4<f32>",
-
-  // The vertex stage assigns the final expression to gl_Position (a vec4)
-  // without checking its type — the same untyped stage-output defect as the
-  // WGSL block above, in the other backend.
-  "glsl:RMSL > compileGLSL.vertex emits gl_Position":
-    "vertex output takes any type: vec3 -> gl_Position (vec4)",
-  "glsl:RMSL > varying is out in vertex, in in fragment GLSL":
-    "vertex output takes any type: float -> gl_Position (vec4)",
 
   // GLSL vector comparisons return bvecN, but RMSL types them Node<"bool">
   // and so declares the variable `bool`.

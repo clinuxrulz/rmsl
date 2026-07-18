@@ -363,7 +363,8 @@ describe("RMSL", () => {
     let prog = Fn(() => {
       let mvp = uniform("mat4");
       let pos = attribute("vec3");
-      return mvp.node().multVec(pos.node());
+      // gl_Position is a vec4, so the stage result has to be one too.
+      return vec4(mvp.node().multVec(pos.node()), 1.0);
     });
     let glsl = compileGLSL.vertex(prog());
     expect(glsl).toContain("gl_Position");
@@ -385,10 +386,13 @@ describe("RMSL", () => {
   });
 
   it("compileWGSL.fragment emits @fragment and FragmentOutput", () => {
-    let prog = Fn(() => float(1.0).toVar());
+    // The struct only appears when there is something to return, so the stage
+    // result has to be a vec4 for the implicit colour output to be emitted.
+    let prog = Fn(() => vec4(1.0, 0.0, 0.0, 1.0).toVar());
     let wgsl = compileWGSL.fragment(prog());
     expect(wgsl).toContain("@fragment");
     expect(wgsl).toContain("FragmentOutput");
+    expect(wgsl).toContain("_rmsl_fragColor");
   });
 
   it("output() creates output variable in GLSL fragment", () => {
@@ -491,7 +495,8 @@ describe("RMSL", () => {
     let prog = Fn(() => {
       let pos = attribute("vec3");
       let mvp = uniform("mat4");
-      return mvp.node().multVec(pos.node());
+      // @builtin(position) is a vec4, so the stage result has to be one too.
+      return vec4(mvp.node().multVec(pos.node()), 1.0);
     });
     let wgsl = compileWGSL.vertex(prog());
     expect(wgsl).toContain("struct VertexInput");

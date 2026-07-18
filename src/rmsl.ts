@@ -1439,10 +1439,17 @@ function compileGLSLWithStage(
   let results = nodes.map(n => compileGLSLStage(n, ctx));
   let allBody: string[] = [];
   let lastExpr = "0.0";
-  for (let r of results) {
-    allBody.push(...r.decls, ...r.body);
-    lastExpr = r.expr;
+  // The stage output is a fixed type (vec4 for gl_Position and the implicit
+  // fragment colour), so the final expression's type decides whether it can be
+  // assigned there at all. Emitting it unchecked produces shaders that do not
+  // compile — `gl_Position = <vec3>` and `result._rmsl_fragColor = <f32>`.
+  let lastType: string | undefined;
+  for (let i = 0; i < results.length; i++) {
+    allBody.push(...results[i].decls, ...results[i].body);
+    lastExpr = results[i].expr;
+    lastType = (nodes[i] as any)?._t;
   }
+  let hasVec4Result = lastExpr !== "0.0" && lastType === "vec4";
 
   let lines: string[] = [];
   lines.push("#version 300 es");
@@ -1476,7 +1483,7 @@ function compileGLSLWithStage(
     for (let line of allBody) {
       lines.push("  " + line);
     }
-    if (lastExpr !== "0.0") {
+    if (hasVec4Result) {
       lines.push(`  gl_Position = ${lastExpr};`);
     }
     lines.push("}");
@@ -1976,10 +1983,17 @@ function compileWGSLWithStage(
   let results = nodes.map(n => compileWGSLStage(n, ctx));
   let allBody: string[] = [];
   let lastExpr = "0.0";
-  for (let r of results) {
-    allBody.push(...r.decls, ...r.body);
-    lastExpr = r.expr;
+  // The stage output is a fixed type (vec4 for gl_Position and the implicit
+  // fragment colour), so the final expression's type decides whether it can be
+  // assigned there at all. Emitting it unchecked produces shaders that do not
+  // compile — `gl_Position = <vec3>` and `result._rmsl_fragColor = <f32>`.
+  let lastType: string | undefined;
+  for (let i = 0; i < results.length; i++) {
+    allBody.push(...results[i].decls, ...results[i].body);
+    lastExpr = results[i].expr;
+    lastType = (nodes[i] as any)?._t;
   }
+  let hasVec4Result = lastExpr !== "0.0" && lastType === "vec4";
 
   let lines: string[] = [];
   let ubBinding = 0;
@@ -2034,26 +2048,36 @@ function compileWGSLWithStage(
     for (let line of allBody) {
       lines.push("  " + line);
     }
-    if (lastExpr !== "0.0") {
+    if (hasVec4Result) {
       lines.push(`  result.position = ${lastExpr};`);
     }
     lines.push("  return result;");
     lines.push("}");
   } else {
-    lines.push("struct FragmentOutput {");
-    ctx.outputs.forEach((info) => {
-      if (info && info.location != null && info.slot && info.type) {
-        lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
+    // A fragment stage only gets a return struct when it has something to put
+    // in it. WGSL forbids empty structs, so a shader with no declared output
+    // and a non-vec4 result becomes a plain `@fragment fn main()` that returns
+    // nothing — the WGSL equivalent of the GLSL branch emitting no assignment.
+    let emitImplicitColor = ctx.outputs.size === 0 && hasVec4Result;
+    let hasFragmentOutput = ctx.outputs.size > 0 || emitImplicitColor || ctx.fragDepthUsed;
+
+    if (hasFragmentOutput) {
+      lines.push("struct FragmentOutput {");
+      ctx.outputs.forEach((info) => {
+        if (info && info.location != null && info.slot && info.type) {
+          lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
+        }
+      });
+      if (emitImplicitColor) {
+        lines.push("  @location(0) _rmsl_fragColor: vec4<f32>,");
       }
-    });
-    if (ctx.outputs.size === 0) {
-      lines.push("  @location(0) _rmsl_fragColor: vec4<f32>,");
+      if (ctx.fragDepthUsed) {
+        lines.push("  @builtin(frag_depth) _rmsl_fragDepth: f32,");
+      }
+      lines.push("};");
+      lines.push("");
     }
-    if (ctx.fragDepthUsed) {
-      lines.push("  @builtin(frag_depth) _rmsl_fragDepth: f32,");
-    }
-    lines.push("};");
-    lines.push("");
+
     lines.push("@fragment");
     let fragParams = "";
     let fragVaryingLoc = 0;
@@ -2062,18 +2086,22 @@ function compileWGSLWithStage(
       if (fragParams) fragParams += ", ";
       fragParams += `@location(${fragVaryingLoc++}) ${info.slot}: ${info.type}`;
     }
-    lines.push(`fn main(${fragParams}) -> FragmentOutput {`);
-    lines.push("  var result: FragmentOutput;");
+    lines.push(`fn main(${fragParams})${hasFragmentOutput ? " -> FragmentOutput" : ""} {`);
+    if (hasFragmentOutput) {
+      lines.push("  var result: FragmentOutput;");
+    }
     for (let line of allBody) {
       lines.push("  " + line);
     }
-    if (ctx.outputs.size === 0 && lastExpr !== "0.0") {
+    if (emitImplicitColor) {
       lines.push(`  result._rmsl_fragColor = ${lastExpr};`);
     }
     if (ctx.fragDepthUsed && !allBody.some(l => l.includes("_rmsl_fragDepth ="))) {
       lines.push("  result._rmsl_fragDepth = 1.0;");
     }
-    lines.push("  return result;");
+    if (hasFragmentOutput) {
+      lines.push("  return result;");
+    }
     lines.push("}");
   }
   return lines.join("\n");
