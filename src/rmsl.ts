@@ -1141,6 +1141,31 @@ function forUpdateExpr(
   return form === "comma" ? statements.join(", ") : statements[statements.length - 1];
 }
 
+/**
+ * Reject a vertex stage whose result cannot reach the position output.
+ *
+ * That output is a vec4 and writing it is not optional, so a vertex shader
+ * returning anything else is unambiguously a mistake: a value was produced and
+ * has nowhere to go. Skipping the write instead would link cleanly and draw
+ * nothing, which is the silent-corruption failure mode the unhandled-node case
+ * throws to avoid.
+ *
+ * A fragment stage is deliberately not checked. A shader with no colour output
+ * is legal, so "no result" there is a choice rather than a mistake.
+ */
+function assertStageResult(
+  shaderStage: "vertex" | "fragment",
+  lastExpr: string,
+  lastType: string | undefined,
+): void {
+  if (shaderStage !== "vertex" || lastExpr === "0.0" || lastType === "vec4") return;
+  throw new Error(
+    `[RMSL] A vertex shader's result becomes its position, which is a vec4, but `
+    + `this one returns ${lastType ?? "an untyped value"}. `
+    + `Wrap it — for example vec4(value, 1.0).`,
+  );
+}
+
 function compileGLSLStage(
   node: BaseNode<ShaderType> | ShaderType extends never ? never : any,
   ctx: CompileCtx,
@@ -1651,6 +1676,7 @@ function compileGLSLWithStage(
     lastExpr = results[i].expr;
     lastType = (nodes[i] as any)?._t;
   }
+  assertStageResult(shaderStage, lastExpr, lastType);
   let hasVec4Result = lastExpr !== "0.0" && lastType === "vec4";
 
   let lines: string[] = [];
@@ -2076,7 +2102,6 @@ function compileWGSLStage(
     }
 
     case "assign": {
-      let lhs = compileWGSLStage(node.params![0], ctx);
       let rhs = compileWGSLStage(node.params![1], ctx);
 
       // WGSL only makes a single component assignable: `v.x = e` is a
@@ -2089,6 +2114,9 @@ function compileWGSLStage(
       let pattern: string | undefined =
         target?.type === "swizzle" ? (target.value as string) : undefined;
 
+      // The swizzle itself is never compiled here — it would emit the very
+      // `v.xy` form WGSL rejects, and any statements it produced would be
+      // dropped along with it. The base is compiled instead.
       if (pattern && pattern.length > 1) {
         let base = compileWGSLStage(target.params![0], ctx);
         let temp = `_rmsl_sw${ctx.nextId++}`;
@@ -2108,6 +2136,7 @@ function compileWGSLStage(
         };
       }
 
+      let lhs = compileWGSLStage(node.params![0], ctx);
       return {
         decls: [...lhs.decls, ...rhs.decls],
         body: [...lhs.body, ...rhs.body, `${lhs.expr} = ${rhs.expr};`],
@@ -2218,11 +2247,6 @@ function compileWGSLStage(
 }
 
 /**
- * A WGSL shift. The value keeps its own type, but the shift amount must be
- * u32 — `i32 << i32` has no overload — so the right operand is converted when
- * it is not already unsigned.
- */
-/**
  * WGSL helper functions, emitted only when a shader uses them.
  *
  * GLSL has `inverse()` as a builtin and WGSL does not, so the matrix inverses
@@ -2285,6 +2309,11 @@ const WGSL_HELPERS: Record<string, string> = {
 }`,
 };
 
+/**
+ * A WGSL shift. The value keeps its own type, but the shift amount must be
+ * u32 — `i32 << i32` has no overload — so the right operand is converted when
+ * it is not already unsigned.
+ */
 function shiftWGSL(
   node: BaseNode<ShaderType>,
   ctx: CompileCtx,
@@ -2401,6 +2430,7 @@ function compileWGSLWithStage(
     lastExpr = results[i].expr;
     lastType = (nodes[i] as any)?._t;
   }
+  assertStageResult(shaderStage, lastExpr, lastType);
   let hasVec4Result = lastExpr !== "0.0" && lastType === "vec4";
 
   let lines: string[] = [];

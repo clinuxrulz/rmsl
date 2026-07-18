@@ -34,12 +34,19 @@ interface Recorded {
   test: string;
   lang: ShaderLang;
   stage: ShaderStage;
+  /**
+   * Ties the two languages' entries for one program together. A test may
+   * compile several programs at the same stage, so test and stage alone do not
+   * identify a pair.
+   */
+  pair: number;
   /** null when the compiler threw rather than producing source. */
   src: string | null;
   compileError?: string;
 }
 
 const recorded: Recorded[] = [];
+let nextPair = 0;
 
 /**
  * Shaders that are known to be invalid, with the defect that produces them.
@@ -60,13 +67,16 @@ export const KNOWN_INVALID: Record<string, string> = {
  * makes parity structural — a new test gets it for free — while the test's own
  * assertions still run against the language it chose.
  */
-function recordBoth(root: any, stage: ShaderStage): void {
+function recordBoth(root: any, stage: ShaderStage, want: ShaderLang): string {
   const test = expect.getState().currentTestName ?? "<unknown test>";
+  const pair = nextPair++;
+  const entries: Recorded[] = [];
+
   for (const [lang, compile] of [
     ["glsl", compileGLSL] as const,
     ["wgsl", compileWGSL] as const,
   ]) {
-    const entry: Recorded = { test, lang, stage, src: null };
+    const entry: Recorded = { test, lang, stage, pair, src: null };
     try {
       entry.src = stage === "vertex" ? compile.vertex(root) : compile.fragment(root);
     } catch (error) {
@@ -74,12 +84,15 @@ function recordBoth(root: any, stage: ShaderStage): void {
       // rather than swallowed.
       entry.compileError = error instanceof Error ? error.message : String(error);
     }
-    const alreadySeen = recorded.some(
-      r => r.test === test && r.lang === lang && r.stage === stage
-        && r.src === entry.src && r.compileError === entry.compileError,
-    );
-    if (!alreadySeen) recorded.push(entry);
+    entries.push(entry);
+    recorded.push(entry);
   }
+
+  // The caller's own compilation is one of these, so it is returned rather than
+  // run a third time.
+  const wanted = entries.find(e => e.lang === want)!;
+  if (wanted.compileError) throw new Error(wanted.compileError);
+  return wanted.src!;
 }
 
 /** Shape of `compileGLSL` / `compileWGSL`: callable, with vertex/fragment. */
@@ -89,18 +102,22 @@ interface Compiler {
   fragment(root: any): string;
 }
 
-function wrap(compile: Compiler): Compiler {
+function wrap(lang: ShaderLang): Compiler {
   return Object.assign(
-    (root: any) => { recordBoth(root, "fragment"); return compile(root); },
+    (root: any) => recordBoth(root, "fragment", lang),
     {
-      vertex: (root: any) => { recordBoth(root, "vertex"); return compile.vertex(root); },
-      fragment: (root: any) => { recordBoth(root, "fragment"); return compile.fragment(root); },
+      vertex: (root: any) => recordBoth(root, "vertex", lang),
+      fragment: (root: any) => recordBoth(root, "fragment", lang),
     },
   );
 }
 
-export const recordGLSL = (compile: Compiler) => wrap(compile);
-export const recordWGSL = (compile: Compiler) => wrap(compile);
+/**
+ * Drop-in replacements for `compileGLSL` / `compileWGSL`. Each returns the
+ * language it is named for, and records both.
+ */
+export const recordingGLSL = wrap("glsl");
+export const recordingWGSL = wrap("wgsl");
 
 /** Compile every recorded GLSL shader in one browser session. */
 async function validateGLSL(items: Recorded[]): Promise<(string | null)[]> {
@@ -175,7 +192,7 @@ export async function assertRecordedShadersValid(): Promise<void> {
     // exactly that — builtinFragDepth() in a vertex stage, for one. Only one
     // backend refusing what the other accepts is a gap worth reporting.
     const counterpart = recorded.find(
-      r => r.test === entry.test && r.stage === entry.stage && r.lang !== entry.lang,
+      r => r.pair === entry.pair && r.lang !== entry.lang,
     );
     if (counterpart?.compileError) continue;
     failed.set(`${entry.lang}:${entry.test}`, `did not compile — ${entry.compileError}`);

@@ -4,19 +4,18 @@ import {
   mat2, mat2x3, mat2x4, mat3, mat3x2, mat3x4, mat4, mat4x2, mat4x3,
   If, For, While, discard, break_, continue_,
   uniform, attribute, varying, output, builtinPosition, builtinFragDepth,
-  compileGLSL as rawCompileGLSL, compileWGSL as rawCompileWGSL,
   isUniformNode, isAttributeNode, isVaryingNode,
 } from "./rmsl";
+// Recording stand-ins for the real compilers: each returns the language it is
+// named for and additionally compiles the program to the other, so every shader
+// the tests generate is checked by a real GLSL and WGSL implementation in the
+// afterAll below. Aliasing at the import means the tests need no changes; see
+// src/testing/shader-validity.ts for why substring assertions were not enough.
 import {
-  recordGLSL, recordWGSL, assertRecordedShadersValid,
+  recordingGLSL as compileGLSL,
+  recordingWGSL as compileWGSL,
+  assertRecordedShadersValid,
 } from "./testing/shader-validity";
-
-// Every shader these tests generate is additionally compiled by a real GLSL and
-// WGSL implementation in the afterAll below. Aliasing here means the tests
-// themselves need no changes; see src/testing/shader-validity.ts for why
-// substring assertions alone were not enough.
-const compileGLSL = recordGLSL(rawCompileGLSL);
-const compileWGSL = recordWGSL(rawCompileWGSL);
 
 afterAll(async () => {
   await assertRecordedShadersValid();
@@ -523,12 +522,27 @@ describe("RMSL", () => {
   it("varying is out in vertex, in in fragment GLSL", () => {
     let prog = Fn(() => {
       let v = varying("vec3");
-      return v.x;
+      // A vertex shader's result is its position, so it has to be a vec4.
+      return vec4(v.x, v.y, v.z, 1.0);
     });
     let vertexGLSL = compileGLSL.vertex(prog());
     let fragmentGLSL = compileGLSL.fragment(prog());
     expect(vertexGLSL).toContain("out vec3");
     expect(fragmentGLSL).toContain("in vec3");
+  });
+
+  // Skipping the write instead would link cleanly and draw nothing.
+  it("rejects a vertex shader whose result is not a vec4", () => {
+    let prog = Fn(() => vec3(1, 2, 3).toVar());
+    expect(() => compileGLSL.vertex(prog())).toThrow(/vertex shader's result/);
+    expect(() => compileWGSL.vertex(prog())).toThrow(/vertex shader's result/);
+  });
+
+  // A fragment shader with no colour output is legal, so this stays permitted.
+  it("allows a fragment shader with no output", () => {
+    let prog = Fn(() => float(3.14).toVar());
+    expect(() => compileGLSL.fragment(prog())).not.toThrow();
+    expect(compileGLSL.fragment(prog())).toContain("3.14");
   });
 
   it("For loop init hoists declaration into for header in GLSL", () => {
