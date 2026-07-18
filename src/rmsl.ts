@@ -1756,9 +1756,18 @@ let typeToWGSL: Record<string, string> = {
   void: "void",
 };
 
-/** Column/row counts for WGSL's square matrix types. */
-const MATRIX_DIMENSIONS: Record<string, number> = {
-  mat2: 2, mat3: 3, mat4: 4,
+/**
+ * `[columns, rows]` per matrix type. A GLSL/WGSL `matCxR` is C columns of R
+ * rows, and the square names are the C === R shorthand.
+ *
+ * Every matrix type is listed. Holding only the square ones let the non-square
+ * ones fall through the diagonal expansion below and reach WGSL as
+ * `mat2x3<f32>(2f)`, which has no matching constructor.
+ */
+const MATRIX_DIMENSIONS: Record<string, [number, number]> = {
+  mat2: [2, 2], mat2x3: [2, 3], mat2x4: [2, 4],
+  mat3x2: [3, 2], mat3: [3, 3], mat3x4: [3, 4],
+  mat4x2: [4, 2], mat4x3: [4, 3], mat4: [4, 4],
 };
 
 /**
@@ -1766,16 +1775,26 @@ const MATRIX_DIMENSIONS: Record<string, number> = {
  *
  * GLSL reads `mat4(1.0)` as a diagonal — the identity scaled by the scalar.
  * WGSL has no such overload and requires every component, so the one argument
- * is written out as the full diagonal. Any other argument count is already
- * component-wise and passes through.
+ * is written out as the full diagonal, column by column.
+ *
+ * Only a *scalar* argument means a diagonal. A lone matrix argument is a copy
+ * or truncation — `mat3(someMat4)` — which WGSL spells the same way GLSL does,
+ * so it passes through. Expanding it instead produced
+ * `mat3x3<f32>(m, 0f, 0f, 0f, m, ...)`, a constructor that does not exist.
  */
-function wgslMatrixArgs(type: string, args: string[]): string[] {
-  let size = MATRIX_DIMENSIONS[type];
-  if (size === undefined || args.length !== 1) return args;
+function wgslMatrixArgs(
+  type: string,
+  args: string[],
+  sourceType: string | undefined,
+): string[] {
+  let shape = MATRIX_DIMENSIONS[type];
+  if (shape === undefined || args.length !== 1) return args;
+  if (TYPE_WIDTH[sourceType as string] !== 1) return args;
+  let [columns, rows] = shape;
   let scalar = args[0];
   let out: string[] = [];
-  for (let col = 0; col < size; col++) {
-    for (let row = 0; row < size; row++) out.push(row === col ? scalar : "0f");
+  for (let col = 0; col < columns; col++) {
+    for (let row = 0; row < rows; row++) out.push(row === col ? scalar : "0f");
   }
   return out;
 }
@@ -1847,6 +1866,7 @@ function compileWGSLStage(
       let args = wgslMatrixArgs(
         node._t as string,
         params.map((p: any) => p.expr),
+        sourceType,
       ).join(", ");
       return {
         decls: params.flatMap((p: any) => p.decls),

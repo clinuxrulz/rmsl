@@ -1004,6 +1004,38 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     }
   });
 
+  // GLSL reads a lone scalar as a diagonal, so WGSL — which has no such
+  // overload — has to write every component out. The expansion has to know the
+  // shape: a matCxR is C columns of R rows, and only the square types were
+  // listed, so the non-square ones passed straight through as `mat2x3<f32>(2f)`.
+  it("expands a scalar matrix constructor to a full diagonal in WGSL", () => {
+    let cases: [string, any, string][] = [
+      ["mat2", mat2, "mat2x2<f32>(2f, 0f, 0f, 2f)"],
+      ["mat3", mat3, "mat3x3<f32>(2f, 0f, 0f, 0f, 2f, 0f, 0f, 0f, 2f)"],
+      ["mat2x3", mat2x3, "mat2x3<f32>(2f, 0f, 0f, 0f, 2f, 0f)"],
+      ["mat3x2", mat3x2, "mat3x2<f32>(2f, 0f, 0f, 2f, 0f, 0f)"],
+      ["mat4x2", mat4x2, "mat4x2<f32>(2f, 0f, 0f, 2f, 0f, 0f, 0f, 0f)"],
+    ];
+    for (let [name, ctor, want] of cases) {
+      let prog = Fn(() => ctor(2.0).toVar());
+      expect(compileWGSL(prog()), name).toContain(want);
+      // GLSL keeps the scalar form, which is what it means natively.
+      expect(compileGLSL(prog()), name).toContain(name + "(2.0)");
+    }
+  });
+
+  // A lone argument is only a diagonal when it is a scalar. Building a matrix
+  // from another matrix is a copy/truncate, and expanding it produced
+  // `mat3x3<f32>(m, 0f, 0f, 0f, m, ...)` — a constructor that does not exist.
+  it("keeps a matrix-from-matrix constructor as a single argument", () => {
+    let prog3 = Fn(() => mat3(uniform("mat3")).toVar());
+    expect(compileWGSL(prog3())).toMatch(/mat3x3<f32>\(_rmsl_u\d+\)/);
+    expect(compileGLSL(prog3())).toMatch(/mat3\(_rmsl_u\d+\)/);
+
+    let prog4 = Fn(() => mat4(uniform("mat4")).toVar());
+    expect(compileWGSL(prog4())).toMatch(/mat4x4<f32>\(_rmsl_u\d+\)/);
+  });
+
   it("compiles every swizzle accessor", () => {
     let single = ["x", "y", "z", "w", "r", "g", "b", "a"];
     let pairs = ["xy", "xz", "xw", "yz", "yw", "zw"];
