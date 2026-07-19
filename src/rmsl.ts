@@ -395,16 +395,8 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   notEqual(other: any) { return comp("notEqual", this, other); }
 
   // === VecCommonOps ===
-  dot(other: any): any {
-    let r = op("dot", this, other);
-    r._t = "float";
-    return r;
-  }
-  length(): any {
-    let r = op1("length", this);
-    r._t = "float";
-    return r;
-  }
+  dot(other: any): any { return op("dot", this, other); }
+  length(): any { return op1("length", this); }
   normalize(): any { return op1("normalize", this); }
   distance(other: any): any { return op("distance", this, other); }
   reflect(normal: any): any { return op("reflect", this, normal); }
@@ -609,18 +601,18 @@ const REDUCING_OPS: Record<string, string | ((operandType: string) => string)> =
   dot: "float",
   length: "float",
   distance: "float",
-  // A matrix column, so it has as many components as the matrix has rows —
-  // a mat2x3 is two columns of three, and indexing it gives a vec3. Expressed
-  // as a function because unlike the others it depends on the operand.
   // Transposing swaps columns for rows, so a matCxR becomes a matRxC. A square
-  // matrix keeps its type, which is why this went unnoticed while only the
-  // square types were reachable.
+  // matrix keeps its type, which is why this only matters once the non-square
+  // ones are reachable.
   transpose: (operandType) => {
     let shape = MATRIX_DIMENSIONS[operandType];
     if (shape === undefined) return operandType;
     let [columns, rows] = shape;
     return columns === rows ? operandType : `mat${rows}x${columns}`;
   },
+  // A matrix column, so it has as many components as the matrix has rows —
+  // a mat2x3 is two columns of three, and indexing it gives a vec3. Expressed
+  // as a function because unlike the others it depends on the operand.
   matrixElement: (operandType) => {
     let shape = MATRIX_DIMENSIONS[operandType];
     return shape === undefined ? "float" : `vec${shape[1]}`;
