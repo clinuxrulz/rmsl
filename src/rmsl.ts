@@ -1120,6 +1120,11 @@ interface CompileCtx {
    * out on demand rather than always.
    */
   wgslHelpers: Set<string>;
+  /**
+   * Whether the program assigned the position itself. A vertex stage that has
+   * done so needs no implicit write, and its result is free to be anything.
+   */
+  positionWritten: boolean;
   inFn: boolean;
   fragDepthUsed: boolean;
 }
@@ -1235,10 +1240,18 @@ function forUpdateExpr(
  */
 function assertStageResult(
   shaderStage: "vertex" | "fragment",
-  lastExpr: string,
   lastType: string | undefined,
+  positionWritten: boolean,
 ): void {
-  if (shaderStage !== "vertex" || lastExpr === "0.0" || lastType === "vec4") return;
+  // Whether a stage produced a value is a question about its type, not about
+  // the text it compiled to. Asking the text meant comparing against "0.0",
+  // which is also how GLSL spells the number zero, so a vertex shader returning
+  // zero was read as returning nothing and slipped through.
+  if (shaderStage !== "vertex" || lastType === undefined || lastType === "void") return;
+  if (lastType === "vec4") return;
+  // The program set the position itself, so its result has nowhere it needs to
+  // go and can be anything.
+  if (positionWritten) return;
   throw new Error(
     `[RMSL] A vertex shader's result becomes its position, which is a vec4, but `
     + `this one returns ${lastType ?? "an untyped value"}. `
@@ -1569,6 +1582,11 @@ function compileGLSLNode(
     }
 
     case "assign": {
+      // An explicit write to the position tells the stage check that the
+      // program has taken care of it.
+      if ((node.params![0] as any)?.type === "builtinPosition") {
+        ctx.positionWritten = true;
+      }
       let lhs = compileGLSLStage(node.params![0], ctx);
       let rhs = compileGLSLStage(node.params![1], ctx);
       return {
@@ -1788,6 +1806,7 @@ function compileGLSLWithStage(
     varDefs: new Map(),
     memo: new Map(),
     wgslHelpers: new Set(),
+    positionWritten: false,
     inFn: false,
     fragDepthUsed: false,
   };
@@ -1806,8 +1825,11 @@ function compileGLSLWithStage(
     lastExpr = results[i].expr;
     lastType = (nodes[i] as any)?._t;
   }
-  assertStageResult(shaderStage, lastExpr, lastType);
-  let hasVec4Result = lastExpr !== "0.0" && lastType === "vec4";
+  assertStageResult(shaderStage, lastType, ctx.positionWritten);
+  // A vec4-typed node always has a value, so its type alone settles this. An
+  // explicit write means the implicit one would be a second, conflicting
+  // assignment.
+  let hasVec4Result = lastType === "vec4" && !ctx.positionWritten;
   // A fragment stage that declares no output of its own still has to put its
   // colour somewhere, and GLSL ES 3.00 removed gl_FragColor, so an output is
   // declared for it. This mirrors the WGSL backend, which already emitted an
@@ -2307,6 +2329,11 @@ function compileWGSLNode(
     }
 
     case "assign": {
+      // An explicit write to the position tells the stage check that the
+      // program has taken care of it.
+      if ((node.params![0] as any)?.type === "builtinPosition") {
+        ctx.positionWritten = true;
+      }
       let rhs = compileWGSLStage(node.params![1], ctx);
 
       // WGSL only makes a single component assignable: `v.x = e` is a
@@ -2653,6 +2680,7 @@ function compileWGSLWithStage(
     varDefs: new Map(),
     memo: new Map(),
     wgslHelpers: new Set(),
+    positionWritten: false,
     inFn: false,
     fragDepthUsed: false,
   };
@@ -2671,8 +2699,11 @@ function compileWGSLWithStage(
     lastExpr = results[i].expr;
     lastType = (nodes[i] as any)?._t;
   }
-  assertStageResult(shaderStage, lastExpr, lastType);
-  let hasVec4Result = lastExpr !== "0.0" && lastType === "vec4";
+  assertStageResult(shaderStage, lastType, ctx.positionWritten);
+  // A vec4-typed node always has a value, so its type alone settles this. An
+  // explicit write means the implicit one would be a second, conflicting
+  // assignment.
+  let hasVec4Result = lastType === "vec4" && !ctx.positionWritten;
 
   let lines: string[] = [];
   let ubBinding = 0;
@@ -2836,6 +2867,7 @@ function compileFnBody(
       varDefs: new Map(),
       memo: new Map(),
       wgslHelpers: new Set(),
+      positionWritten: false,
       inFn: false,
       fragDepthUsed: false,
     };
@@ -2872,6 +2904,7 @@ function compileFnBody(
       varDefs: new Map(),
       memo: new Map(),
       wgslHelpers: new Set(),
+      positionWritten: false,
       inFn: false,
       fragDepthUsed: false,
     };

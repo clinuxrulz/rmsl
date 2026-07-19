@@ -579,6 +579,46 @@ describe("RMSL", () => {
     expect(() => compileWGSL.vertex(prog())).toThrow(/vertex shader's result/);
   });
 
+  // "No result" was recognised by comparing the emitted text against "0.0",
+  // which is also what the number zero compiles to in GLSL. So a vertex shader
+  // returning zero slipped past the check and produced a shader that writes no
+  // position — the draw-nothing failure the check exists to prevent — while the
+  // same program was refused by WGSL, which spells zero differently.
+  it("rejects a vertex result of zero, like any other non-position", () => {
+    expect(() => compileGLSL.vertex(Fn(() => float(0))() as any))
+      .toThrow(/vertex shader's result/);
+    expect(() => compileWGSL.vertex(Fn(() => float(0))() as any))
+      .toThrow(/vertex shader's result/);
+  });
+
+  it("rejects a vertex result that folds to zero", () => {
+    expect(() => compileGLSL.vertex(Fn(() => float(2).sub(float(2)))() as any))
+      .toThrow(/vertex shader's result/);
+  });
+
+  // Writing the position explicitly is the documented way to set it. The check
+  // on the stage result did not know that had happened, so it demanded a vec4
+  // result as well — and following its advice would have written the position
+  // twice, with the returned value overwriting the deliberate one.
+  it("allows a vertex shader that writes the position itself", () => {
+    let build = () => Fn(() => {
+      builtinPosition().assign(vec4(1, 2, 3, 4));
+      return float(1.0);
+    });
+    let glsl = compileGLSL.vertex(build()() as any);
+    expect(glsl.match(/gl_Position = /g) ?? [], "written once").toHaveLength(1);
+    expect(glsl).toContain("vec4(1, 2, 3, 4)");
+
+    let wgsl = compileWGSL.vertex(build()() as any);
+    expect(wgsl.match(/result\.position = /g) ?? [], "written once").toHaveLength(1);
+  });
+
+  // With no explicit write, the result still has to be able to become one.
+  it("still requires a position when the shader writes none", () => {
+    expect(() => compileGLSL.vertex(Fn(() => float(1))() as any))
+      .toThrow(/vertex shader's result/);
+  });
+
   // A fragment shader with no colour output is legal, so this stays permitted.
   it("allows a fragment shader with no output", () => {
     let prog = Fn(() => float(3.14).toVar());
