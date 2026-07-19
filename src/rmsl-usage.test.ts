@@ -205,7 +205,7 @@ describe("RMSL", () => {
       vec3(1,2,3).lessThan(vec3(4,5,6)).all().toVar(),
       vec3(1,2,3).greaterThan(vec3(4,5,6)).any().toVar(),
     ]);
-    let [a, b] = prog() as any;
+    let [a, b] = prog();
     let glsl = compileGLSL([a, b]);
     expect(glsl).toContain("all(lessThan(");
     expect(glsl).toContain("any(greaterThan(");
@@ -486,7 +486,7 @@ describe("RMSL", () => {
       outColor.assign(vec4(1, 0, 0, 1));
       return vec4(0, 1, 0, 1);
     });
-    let glsl = compileGLSL.fragment(prog() as any);
+    let glsl = compileGLSL.fragment(prog());
     expect(glsl.match(/_rmsl_o\d+ = /g) ?? []).toHaveLength(1);
     expect(glsl).toContain("vec4(1, 0, 0, 1)");
   });
@@ -497,7 +497,7 @@ describe("RMSL", () => {
       outColor.assign(vec4(1, 0, 0, 1));
       return float(2).toVar();
     });
-    let glsl = compileGLSL.fragment(prog() as any);
+    let glsl = compileGLSL.fragment(prog());
     expect(glsl.match(/_rmsl_o\d+ = /g) ?? []).toHaveLength(1);
   });
 
@@ -585,14 +585,14 @@ describe("RMSL", () => {
   // position — the draw-nothing failure the check exists to prevent — while the
   // same program was refused by WGSL, which spells zero differently.
   it("rejects a vertex result of zero, like any other non-position", () => {
-    expect(() => compileGLSL.vertex(Fn(() => float(0))() as any))
+    expect(() => compileGLSL.vertex(Fn(() => float(0))()))
       .toThrow(/vertex shader's result/);
-    expect(() => compileWGSL.vertex(Fn(() => float(0))() as any))
+    expect(() => compileWGSL.vertex(Fn(() => float(0))()))
       .toThrow(/vertex shader's result/);
   });
 
   it("rejects a vertex result that folds to zero", () => {
-    expect(() => compileGLSL.vertex(Fn(() => float(2).sub(float(2)))() as any))
+    expect(() => compileGLSL.vertex(Fn(() => float(2).sub(float(2)))()))
       .toThrow(/vertex shader's result/);
   });
 
@@ -605,17 +605,17 @@ describe("RMSL", () => {
       builtinPosition().assign(vec4(1, 2, 3, 4));
       return float(1.0);
     });
-    let glsl = compileGLSL.vertex(build()() as any);
+    let glsl = compileGLSL.vertex(build()());
     expect(glsl.match(/gl_Position = /g) ?? [], "written once").toHaveLength(1);
     expect(glsl).toContain("vec4(1, 2, 3, 4)");
 
-    let wgsl = compileWGSL.vertex(build()() as any);
+    let wgsl = compileWGSL.vertex(build()());
     expect(wgsl.match(/result\.position = /g) ?? [], "written once").toHaveLength(1);
   });
 
   // With no explicit write, the result still has to be able to become one.
   it("still requires a position when the shader writes none", () => {
-    expect(() => compileGLSL.vertex(Fn(() => float(1))() as any))
+    expect(() => compileGLSL.vertex(Fn(() => float(1))()))
       .toThrow(/vertex shader's result/);
   });
 
@@ -1142,9 +1142,9 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     // a vec3, and writing it that way is how the first draft of this test got
     // caught by the shader validation rather than by its own assertions.
     let cases: [() => any, string, string][] = [
-      [() => vec2(1, 1).mult([1, 2] as any), "vec2", "vec2<f32>"],
-      [() => vec3(1, 1, 1).mult([1, 2, 3] as any), "vec3", "vec3<f32>"],
-      [() => vec4(1, 1, 1, 1).mult([1, 2, 3, 4] as any), "vec4", "vec4<f32>"],
+      [() => vec2(1, 1).mult([1, 2]), "vec2", "vec2<f32>"],
+      [() => vec3(1, 1, 1).mult([1, 2, 3]), "vec3", "vec3<f32>"],
+      [() => vec4(1, 1, 1, 1).mult([1, 2, 3, 4]), "vec4", "vec4<f32>"],
     ];
     for (let [build, glslType, wgslType] of cases) {
       let prog = Fn(() => build().toVar());
@@ -1165,13 +1165,13 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     let build = () => Fn(() => {
       let acc = float(0).toVar();
       If(boolean(true), () => { acc.assign(acc.add(10)); });
-      return [acc, acc.mult(2)] as any;
+      return [acc, acc.mult(2)];
     });
-    let glsl = compileGLSL(build()() as any);
+    let glsl = compileGLSL(build()());
     expect(glsl.match(/if \(true\)/g) ?? []).toHaveLength(1);
     expect(glsl.match(/\+ 10\.0/g) ?? []).toHaveLength(1);
 
-    let wgsl = compileWGSL(build()() as any);
+    let wgsl = compileWGSL(build()());
     expect(wgsl.match(/if \(true\)/g) ?? []).toHaveLength(1);
     expect(wgsl.match(/\+ 10f/g) ?? []).toHaveLength(1);
   });
@@ -1183,9 +1183,9 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     let build = () => Fn(() => {
       let a = float(1).toVar();
       If(boolean(true), () => { let b = a.add(2).toVar(); a.assign(b); });
-      return [a, a.mult(2)] as any;
+      return [a, a.mult(2)];
     });
-    let glsl = compileGLSL(build()() as any);
+    let glsl = compileGLSL(build()());
     expect(glsl.match(/if \(true\)/g) ?? []).toHaveLength(1);
     // The declaration and its only use are both inside the single block.
     let inner = glsl.slice(glsl.indexOf("if (true)"));
@@ -1193,7 +1193,7 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(declared, "inner declaration emitted").not.toBeNull();
     expect(inner.match(new RegExp(declared![1], "g")) ?? []).toHaveLength(2);
 
-    expect(compileWGSL(build()() as any).match(/if \(true\)/g) ?? []).toHaveLength(1);
+    expect(compileWGSL(build()()).match(/if \(true\)/g) ?? []).toHaveLength(1);
   });
 
   // The loop counter is declared by the for header. Emitting the loop twice
@@ -1208,13 +1208,13 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
         (i) => i.assign(i.add(1)),
         (i) => { total.assign(total.add(i)); },
       );
-      return [total, total.mult(2)] as any;
+      return [total, total.mult(2)];
     });
-    let glsl = compileGLSL(build()() as any);
+    let glsl = compileGLSL(build()());
     expect(glsl.match(/for \(/g) ?? []).toHaveLength(1);
     expect(glsl).toMatch(/for \(float _rmsl_\d+ = 0\.0;/);
 
-    let wgsl = compileWGSL(build()() as any);
+    let wgsl = compileWGSL(build()());
     expect(wgsl.match(/for \(/g) ?? []).toHaveLength(1);
     expect(wgsl).toMatch(/for \(var _rmsl_\d+: f32 = 0f;/);
   });

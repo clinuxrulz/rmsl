@@ -142,9 +142,9 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
       return total;
     })();
 
-    await expectValue(sumTo as any, [5], 10);   // 0+1+2+3+4
-    await expectValue(sumTo as any, [10], 45);
-    await expectValue(sumTo as any, [0], 0);    // condition false on entry
+    await expectValue(sumTo, [5], 10);   // 0+1+2+3+4
+    await expectValue(sumTo, [10], 45);
+    await expectValue(sumTo, [0], 0);    // condition false on entry
   }, 60_000);
 
   // A loop whose update does two things: advance the counter, and tally
@@ -163,7 +163,7 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
       return tally;
     })();
 
-    await expectValue(tallyLoop as any, [], 4);
+    await expectValue(tallyLoop, [], 4);
   }, 60_000);
 
   it("takes the branch the condition selects", async () => {
@@ -174,8 +174,8 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
       return out;
     })();
 
-    await expectValue(branch as any, [2], 10);
-    await expectValue(branch as any, [0], 20);
+    await expectValue(branch, [2], 10);
+    await expectValue(branch, [0], 20);
   }, 60_000);
 
   it("walks an if/else-if/else chain in order", async () => {
@@ -187,9 +187,9 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
       return out;
     })();
 
-    await expectValue(classify as any, [5], 1);
-    await expectValue(classify as any, [15], 2);
-    await expectValue(classify as any, [25], 3);
+    await expectValue(classify, [5], 1);
+    await expectValue(classify, [15], 2);
+    await expectValue(classify, [25], 3);
   }, 60_000);
 
   it("runs a while loop until its condition fails", async () => {
@@ -203,8 +203,8 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
       return steps;
     })();
 
-    await expectValue(countdown as any, [4], 4);
-    await expectValue(countdown as any, [0], 0);
+    await expectValue(countdown, [4], 4);
+    await expectValue(countdown, [0], 0);
   }, 60_000);
 
   // break_ and continue_ change which iterations contribute, so the sum says
@@ -225,8 +225,8 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
       return total;
     })();
 
-    await expectValue(sumUntilBreak as any, [5], 10);  // stops before i === 5
-    await expectValue(sumUntilBreak as any, [1], 0);   // breaks immediately
+    await expectValue(sumUntilBreak, [5], 10);  // stops before i === 5
+    await expectValue(sumUntilBreak, [1], 0);   // breaks immediately
 
     const sumSkippingFirst = (n: Node<"float">) => Fn(() => {
       const total = float(0).toVar();
@@ -242,6 +242,6 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
       return total;
     })();
 
-    await expectValue(sumSkippingFirst as any, [5], 9);  // 2+3+4, skipping 0,1
+    await expectValue(sumSkippingFirst, [5], 9);  // 2+3+4, skipping 0,1
   }, 60_000);
 });
