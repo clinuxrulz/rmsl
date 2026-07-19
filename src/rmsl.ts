@@ -607,22 +607,43 @@ const UNIFORM_OPERAND_OPS = new Set([
   "step", "smoothstep", "clamp", "min", "max", "pow", "mod",
 ]);
 
+/**
+ * Give a plain JavaScript number the type of the operand it sits beside.
+ *
+ * A number carries no shader type of its own and wrapValue can only guess — it
+ * picks float. Beside an integer operand that guess is wrong: the two operands
+ * disagree, codegen inserts a conversion, and the result stops matching the
+ * node's own type, as in `int x = (float(u) % 2.0)`.
+ *
+ * A number the operand's type cannot represent is refused rather than quietly
+ * reinterpreted. The backends disagreed about those: GLSL widened the operand
+ * and then could not narrow the result back, while WGSL truncated the literal
+ * and carried on.
+ */
+function typedOperand(value: any, operandType: string): BaseNode<ShaderType> {
+  let isIntegral = operandType === "int" || operandType === "uint";
+  if (typeof value !== "number" || !isIntegral) {
+    return wrapValue(value) as BaseNode<ShaderType>;
+  }
+  if (!Number.isInteger(value)) {
+    throw new Error(
+      `[RMSL] ${value} is not a whole number, but the operand beside it is an `
+      + `${operandType}. Convert the operand to a float, or use a whole number.`,
+    );
+  }
+  if (operandType === "uint" && value < 0) {
+    throw new Error(
+      `[RMSL] ${value} is negative, but the operand beside it is unsigned. `
+      + `Use a signed operand, or a literal that is not negative.`,
+    );
+  }
+  return node({ _t: operandType, type: operandType, value }) as BaseNode<ShaderType>;
+}
+
 function op(type: string, ...args: any[]): Node<ShaderType> {
   let first = wrapValue(args[0]) as BaseNode<ShaderType>;
   let firstT = (first as any)?._t || "float";
-  // A plain JS number carries no shader type, and wrapValue can only guess —
-  // it picks float. Beside an integer operand that guess is wrong: the operands
-  // then disagree, codegen inserts a float() conversion, and the result no
-  // longer matches the node's own type, e.g. `int x = (float(u) % 2.0)`. The
-  // literal takes the operand's type instead.
-  let params = [
-    first,
-    ...args.slice(1).map(a =>
-      typeof a === "number" && Number.isInteger(a) && (firstT === "int" || firstT === "uint")
-        ? node({ _t: firstT, type: firstT, value: a }) as BaseNode<ShaderType>
-        : wrapValue(a) as BaseNode<ShaderType>,
-    ),
-  ];
+  let params = [first, ...args.slice(1).map(a => typedOperand(a, firstT))];
   // The operand that defines the op's type — usually the first, but `step` and
   // `smoothstep` take the value last because that is the argument order both
   // languages expect.
@@ -653,7 +674,11 @@ function op1(type: string, a: any): Node<ShaderType> {
  * Three.js's TSL types the same operations.
  */
 function comp(type: string, a: any, b: any): Node<ShaderType> {
-  let params = [wrapValue(a) as BaseNode<ShaderType>, wrapValue(b) as BaseNode<ShaderType>];
+  // Comparisons need the same literal typing arithmetic gets: an unsigned
+  // operand compared against a plain number was reaching WGSL as `u32 < i32`,
+  // for which there is no overload.
+  let first = wrapValue(a) as BaseNode<ShaderType>;
+  let params = [first, typedOperand(b, (first as any)?._t || "float")];
   let widths = params.map(p => TYPE_WIDTH[(p as any)?._t] ?? 1);
   let width = Math.max(widths[0], widths[1]);
 

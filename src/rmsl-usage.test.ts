@@ -1203,6 +1203,35 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(compileGLSL(prog())).toContain("mod(");
   });
 
+  // A plain JavaScript number has no shader type of its own, so it takes the
+  // type of the operand it sits beside. Arithmetic learned that; comparisons
+  // did not, so an unsigned operand was compared against a signed literal and
+  // WGSL had no such overload.
+  it("gives a compared literal the operand's integer type", () => {
+    let unsigned = Fn(() => uniform("uint").lessThan(2).toVar());
+    expect(compileWGSL(unsigned())).toMatch(/\(\S+ < 2u\)/);
+    expect(compileGLSL(unsigned())).not.toContain("float(");
+
+    let signed = Fn(() => uniform("int").greaterThan(3).toVar());
+    expect(compileWGSL(signed())).toMatch(/\(\S+ > 3i\)/);
+    expect(compileGLSL(signed())).not.toContain("float(");
+  });
+
+  // A literal that is not a whole number cannot take an integer type, and the
+  // backends disagreed about what to do instead: GLSL widened the operand and
+  // then failed to narrow the result, WGSL truncated the literal silently.
+  it("refuses a fractional literal beside an integer operand", () => {
+    expect(() => Fn(() => uniform("int").add(2.5).toVar())())
+      .toThrow(/whole number|integer/i);
+  });
+
+  // Negative literals stay signed: an unsigned type has no negative values,
+  // and WGSL has no unary minus for one either.
+  it("refuses a negative literal beside an unsigned operand", () => {
+    expect(() => Fn(() => uniform("uint").add(-1).toVar())())
+      .toThrow(/negative|unsigned/i);
+  });
+
   // WGSL makes a single component assignable but not a multi-component
   // swizzle, so the write is split per component. Splitting only looked at the
   // immediate base, so a swizzle of a swizzle re-emitted the very form the
