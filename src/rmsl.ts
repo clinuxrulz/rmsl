@@ -792,7 +792,7 @@ export function assertBlockScope(
 // Supports single return: Fn(() => { ...; return x; }) -> () => Node<A>
 // Supports multi return: Fn(() => { ...; return [a, b]; }) -> () => [Node<A>, Node<B>]
 // Supports parameters: Fn((a: Node<"float">, b: Node<"float">) => a.add(b)) -> (a, b) => Node<"float">
-export function Fn<T extends any[], R>(fn: (...args: T) => R): (...args: T) => R {
+export function Fn<T extends any[], const R>(fn: (...args: T) => R): (...args: T) => R {
   return ((...args: T) => {
     let oldBlockScope = blockScope;
     try {
@@ -1950,7 +1950,7 @@ function unaryGLSL(
 }
 
 function compileGLSLWithStage(
-  root: Node<ShaderType> | Node<ShaderType>[],
+  root: Node<ShaderType> | readonly Node<ShaderType>[],
   shaderStage: "vertex" | "fragment",
 ): string {
   let ctx: CompileCtx = {
@@ -2082,24 +2082,26 @@ function compileGLSLWithStage(
  * half stays a run-time check.
  *
  * Several values may be returned at once, of which the last becomes the
- * position. Their types are left open: an array literal is inferred as an array
- * rather than a tuple, so no signature can say "the last of these is a vec4"
- * about one, and demanding they all be would refuse programs that work. That
- * case is checked when it compiles instead.
+ * position — so that is the one constrained, and the values before it are
+ * whatever the shader needed on the way there. Saying so requires knowing which
+ * value is last, which is why `Fn` infers an array return as a tuple.
  */
-export type VertexRoot = Node<"vec4"> | Node<ShaderType>[] | void;
+export type VertexRoot =
+  | Node<"vec4">
+  | readonly [...Node<ShaderType>[], Node<"vec4">]
+  | void;
 
 export const compileGLSL: {
-  (root: Node<ShaderType> | Node<ShaderType>[]): string;
+  (root: Node<ShaderType> | readonly Node<ShaderType>[]): string;
   vertex(root: VertexRoot): string;
-  fragment(root: Node<ShaderType> | Node<ShaderType>[]): string;
+  fragment(root: Node<ShaderType> | readonly Node<ShaderType>[]): string;
 } = Object.assign(
-  (root: Node<ShaderType> | Node<ShaderType>[]) => compileGLSLWithStage(root, "fragment"),
+  (root: Node<ShaderType> | readonly Node<ShaderType>[]) => compileGLSLWithStage(root, "fragment"),
   {
     // The value is always a node; void only describes a body that returned
     // nothing, which still compiles to one.
     vertex: (root: VertexRoot) => compileGLSLWithStage(root as Node<ShaderType>, "vertex"),
-    fragment: (root: Node<ShaderType> | Node<ShaderType>[]) => compileGLSLWithStage(root, "fragment"),
+    fragment: (root: Node<ShaderType> | readonly Node<ShaderType>[]) => compileGLSLWithStage(root, "fragment"),
   },
 );
 
@@ -3104,7 +3106,7 @@ function unaryWGSL(
 }
 
 function compileWGSLWithStage(
-  root: Node<ShaderType> | Node<ShaderType>[],
+  root: Node<ShaderType> | readonly Node<ShaderType>[],
   shaderStage: "vertex" | "fragment",
 ): string {
   let ctx: CompileCtx = {
@@ -3278,14 +3280,14 @@ function compileWGSLWithStage(
 }
 
 export const compileWGSL: {
-  (root: Node<ShaderType> | Node<ShaderType>[]): string;
+  (root: Node<ShaderType> | readonly Node<ShaderType>[]): string;
   vertex(root: VertexRoot): string;
-  fragment(root: Node<ShaderType> | Node<ShaderType>[]): string;
+  fragment(root: Node<ShaderType> | readonly Node<ShaderType>[]): string;
 } = Object.assign(
-  (root: Node<ShaderType> | Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
+  (root: Node<ShaderType> | readonly Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
   {
     vertex: (root: VertexRoot) => compileWGSLWithStage(root as Node<ShaderType>, "vertex"),
-    fragment: (root: Node<ShaderType> | Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
+    fragment: (root: Node<ShaderType> | readonly Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
   },
 );
 

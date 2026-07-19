@@ -139,17 +139,17 @@ export function recordShaderSource(
  * real driver would have cost it the type checker.
  */
 interface Compiler {
-  (root: Node<ShaderType> | Node<ShaderType>[]): string;
+  (root: Node<ShaderType> | readonly Node<ShaderType>[]): string;
   vertex(root: VertexRoot): string;
-  fragment(root: Node<ShaderType> | Node<ShaderType>[]): string;
+  fragment(root: Node<ShaderType> | readonly Node<ShaderType>[]): string;
 }
 
 function wrap(lang: ShaderLang): Compiler {
   return Object.assign(
-    (root: Node<ShaderType> | Node<ShaderType>[]) => recordBoth(root, "fragment", lang),
+    (root: Node<ShaderType> | readonly Node<ShaderType>[]) => recordBoth(root, "fragment", lang),
     {
       vertex: (root: VertexRoot) => recordBoth(root as any, "vertex", lang),
-      fragment: (root: Node<ShaderType> | Node<ShaderType>[]) => recordBoth(root, "fragment", lang),
+      fragment: (root: Node<ShaderType> | readonly Node<ShaderType>[]) => recordBoth(root, "fragment", lang),
     },
   );
 }

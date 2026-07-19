@@ -94,13 +94,19 @@ describe("what a vertex stage accepts", () => {
   });
 
   // Several values can be returned at once, and the last becomes the position.
-  // Which one is last is not something a signature can see through an array, so
-  // the members are unconstrained and the check happens when it compiles.
-  it("takes several values, whatever their types", () => {
+  // The values before it are whatever the shader needed on the way there.
+  it("takes several values, of which the last is the position", () => {
     expectTypeOf(compileGLSL.vertex(Fn(() => [
       float(1).toVar(),
       vec4(0, 0, 0, 1).toVar(),
     ])())).toEqualTypeOf<string>();
+  });
+
+  it("refuses several values that do not end in a position", () => {
+    // @ts-expect-error the last of these is a float
+    compileGLSL.vertex(Fn(() => [float(1).toVar(), float(2).toVar()])());
+    // @ts-expect-error a position has to come last, not first
+    compileWGSL.vertex(Fn(() => [vec4(0, 0, 0, 1).toVar(), float(1).toVar()])());
   });
 
   it("refuses a result that cannot become a position", () => {
