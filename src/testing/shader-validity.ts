@@ -26,6 +26,7 @@
 
 import { expect } from "vitest";
 import { compileGLSL, compileWGSL } from "../rmsl";
+import { compileGLSLInPage, gpuDevice, releaseGpu } from "./gpu";
 
 // This file only ever runs under vitest, in Node. Declared here rather than
 // depending on @types/node, which the package itself has no use for.
@@ -151,52 +152,15 @@ function wrap(lang: ShaderLang): Compiler {
 export const recordingGLSL = wrap("glsl");
 export const recordingWGSL = wrap("wgsl");
 
-/** Compile every recorded GLSL shader in one browser session. */
-async function validateGLSL(items: Recorded[]): Promise<(string | null)[]> {
-  if (items.length === 0) return [];
-  const { chromium } = await import("playwright");
-  const browser = await chromium.launch({
-    args: ["--use-gl=swiftshader", "--enable-unsafe-swiftshader"],
-  });
-  try {
-    const page = await browser.newPage();
-    await page.goto("about:blank");
-    return await page.evaluate((list: { src: string; stage: string }[]) => {
-      const gl = document.createElement("canvas").getContext("webgl2");
-      if (!gl) throw new Error("WebGL2 unavailable in the validation browser");
-      return list.map(({ src, stage }) => {
-        // Null is the only value meaning "valid" — see the note in
-        // validationReport. Every failure path below therefore has to produce a
-        // non-empty string, including the ones where the driver tells us
-        // nothing. A lost context makes createShader return null and every
-        // query after it return null too, which would otherwise read as a
-        // clean compile for this shader and every one after it.
-        if (gl.isContextLost()) {
-          throw new Error("WebGL2 context was lost during validation");
-        }
-        const shader = gl.createShader(
-          stage === "vertex" ? gl.VERTEX_SHADER : gl.FRAGMENT_SHADER,
-        );
-        if (!shader) return "could not create a shader object";
-        gl.shaderSource(shader, src);
-        gl.compileShader(shader);
-        if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return null;
-        const log = (gl.getShaderInfoLog(shader) ?? "").trim().split("\n")[0];
-        return log || "failed to compile, and the driver gave no message";
-      });
-    }, items.map(i => ({ src: i.src!, stage: i.stage })));
-  } finally {
-    await browser.close();
-  }
+/** Compile every recorded GLSL shader, in the shared browser page. */
+function validateGLSL(items: Recorded[]): Promise<(string | null)[]> {
+  return compileGLSLInPage(items.map(i => ({ src: i.src!, stage: i.stage })));
 }
 
 /** Compile every recorded WGSL shader through Dawn. */
 async function validateWGSL(items: Recorded[]): Promise<(string | null)[]> {
   if (items.length === 0) return [];
-  const { create } = await import("@kmamal/gpu");
-  const adapter = await create([]).requestAdapter();
-  if (!adapter) throw new Error("No WebGPU adapter for WGSL validation");
-  const device = await adapter.requestDevice();
+  const device = await gpuDevice();
 
   // pushErrorScope, createShaderModule and popErrorScope are all synchronous
   // stack operations — only the *result* of a pop is asynchronous. So every
@@ -210,17 +174,13 @@ async function validateWGSL(items: Recorded[]): Promise<(string | null)[]> {
     return device.popErrorScope();
   });
 
-  try {
-    const errors = await Promise.all(pending);
-    return errors.map(error =>
-      error
-        ? error.message.split("\n").find((l: string) => l.includes("error:"))?.trim()
-          ?? error.message.split("\n")[0]
-        : null,
-    );
-  } finally {
-    device.destroy?.();
-  }
+  const errors = await Promise.all(pending);
+  return errors.map(error =>
+    error
+      ? error.message.split("\n").find((l: string) => l.includes("error:"))?.trim()
+        ?? error.message.split("\n")[0]
+      : null,
+  );
 }
 
 /**
@@ -249,6 +209,10 @@ export async function assertRecordedShadersValid(): Promise<void> {
     validateGLSL(glsl),
     validateWGSL(wgsl),
   ]);
+
+  // Validation runs once, from an afterAll hook, so what it opened is released
+  // here rather than left for the process to reclaim.
+  await releaseGpu();
 
   const report = validationReport(recorded, glslErrors, wgslErrors);
   if (report) throw new Error(report);

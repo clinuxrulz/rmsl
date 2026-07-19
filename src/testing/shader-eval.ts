@@ -20,6 +20,7 @@
 import {
   compileGLSLFn, compileWGSLFn, type Node,
 } from "../rmsl";
+import { gpuPage, gpuDevice, releaseGpu } from "./gpu";
 
 // Written to rather than console.warn: vitest intercepts console output and
 // does not surface it here, so a warning sent that way is not seen at all.
@@ -58,31 +59,6 @@ function callExpr(args: number[]) {
   return `rmsl_eval(${args.map(a => (Number.isInteger(a) ? a.toFixed(1) : String(a))).join(", ")})`;
 }
 
-// One browser and one GPU device for the whole run; creating either per call
-// costs far more than the dispatch.
-let browser: any;
-let device: any;
-
-async function glslDevice() {
-  if (!browser) {
-    const { chromium } = await import("playwright");
-    browser = await chromium.launch({
-      args: ["--use-gl=swiftshader", "--enable-unsafe-swiftshader"],
-    });
-  }
-  return browser;
-}
-
-async function wgslDevice() {
-  if (!device) {
-    const { create } = await import("@kmamal/gpu");
-    const adapter = await create([]).requestAdapter();
-    if (!adapter) throw new Error("No WebGPU adapter for shader evaluation");
-    device = await adapter.requestDevice();
-  }
-  return device;
-}
-
 /** Compile, run and read back one float from the GLSL backend. */
 export async function evaluateGLSL(build: Build, args: number[] = []): Promise<number> {
   const fn = compileGLSLFn(build as any, { name: "rmsl_eval", params: params(args.length) });
@@ -92,20 +68,30 @@ ${fn}
 layout(location=0) out vec4 result;
 void main() { result = vec4(${callExpr(args)}, 0.0, 0.0, 1.0); }`;
 
-  const page = await (await glslDevice()).newPage();
-  try {
-    await page.goto("about:blank");
+  const page = await gpuPage();
+  {
     return await page.evaluate((fragment: string) => {
-      const gl = document.createElement("canvas").getContext("webgl2")!;
-      if (!gl.getExtension("EXT_color_buffer_float")) {
-        throw new Error("EXT_color_buffer_float unavailable; cannot read float output");
+      // The rendering context, its float target and its vertex buffer are the
+      // same for every expression, so they are built once and kept on the page.
+      // Only the program below differs per call.
+      const cache = globalThis as any;
+      if (!cache.__rmslGL) {
+        const context = document.createElement("canvas").getContext("webgl2")!;
+        if (!context.getExtension("EXT_color_buffer_float")) {
+          throw new Error("EXT_color_buffer_float unavailable; cannot read float output");
+        }
+        const texture = context.createTexture();
+        context.bindTexture(context.TEXTURE_2D, texture);
+        context.texImage2D(context.TEXTURE_2D, 0, context.RGBA32F, 1, 1, 0, context.RGBA, context.FLOAT, null);
+        const framebuffer = context.createFramebuffer();
+        context.bindFramebuffer(context.FRAMEBUFFER, framebuffer);
+        context.framebufferTexture2D(context.FRAMEBUFFER, context.COLOR_ATTACHMENT0, context.TEXTURE_2D, texture, 0);
+        const vertices = context.createBuffer();
+        context.bindBuffer(context.ARRAY_BUFFER, vertices);
+        context.bufferData(context.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), context.STATIC_DRAW);
+        cache.__rmslGL = context;
       }
-      const texture = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 1, 0, gl.RGBA, gl.FLOAT, null);
-      const framebuffer = gl.createFramebuffer();
-      gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+      const gl = cache.__rmslGL as WebGL2RenderingContext;
 
       // Compiled inline rather than through a helper: the bundler renames
       // functions and injects a `__name` shim that does not exist in the page.
@@ -128,9 +114,8 @@ void main() { result = vec4(${callExpr(args)}, 0.0, 0.0, 1.0); }`;
       }
       gl.useProgram(program);
 
-      const buffer = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      // The buffer is already bound and filled; only the attribute binding
+      // belongs to this program.
       const location = gl.getAttribLocation(program, "p");
       gl.enableVertexAttribArray(location);
       gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
@@ -141,8 +126,6 @@ void main() { result = vec4(${callExpr(args)}, 0.0, 0.0, 1.0); }`;
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, out);
       return out[0];
     }, source);
-  } finally {
-    await page.close();
   }
 }
 
@@ -163,7 +146,7 @@ fn main() { result[0] = ${callExpr(args)}; }`);
  * a shader failing to compile is actually reported.
  */
 export async function runWGSL(code: string): Promise<number> {
-  const gpu = await wgslDevice();
+  const gpu = await gpuDevice();
 
   // A shader that fails to compile is reported as an uncaptured device error
   // rather than an exception: the pipeline, the dispatch and the copy that
@@ -178,12 +161,12 @@ export async function runWGSL(code: string): Promise<number> {
     layout: "auto",
     compute: { module, entryPoint: "main" },
   });
-  const failure = await gpu.popErrorScope();
-  if (failure) {
-    let detail = failure.message.split("\n").find((l: string) => l.includes("error:"))
-      ?? failure.message.split("\n")[0];
-    throw new Error(`WGSL shader failed to compile: ${detail.trim()}`);
-  }
+  // Popped now but awaited later: asking the device for the answer here would
+  // block on a round trip before any work is even submitted. The dispatch that
+  // follows is harmless if the module turned out to be invalid — it produces a
+  // buffer of zeroes, which is exactly why the result cannot be trusted until
+  // this has been checked.
+  const compileFailure = gpu.popErrorScope();
 
   const STORAGE = 0x80, COPY_SRC = 0x4, MAP_READ = 0x1, COPY_DST = 0x8;
   const storage = gpu.createBuffer({ size: 4, usage: STORAGE | COPY_SRC });
@@ -200,7 +183,12 @@ export async function runWGSL(code: string): Promise<number> {
     pass.end();
     encoder.copyBufferToBuffer(storage, 0, readback, 0, 4);
     gpu.queue.submit([encoder.finish()]);
-    await readback.mapAsync(MAP_READ);
+    const [failure] = await Promise.all([compileFailure, readback.mapAsync(MAP_READ)]);
+    if (failure) {
+      const detail = failure.message.split("\n").find((l: string) => l.includes("error:"))
+        ?? failure.message.split("\n")[0];
+      throw new Error(`WGSL shader failed to compile: ${detail.trim()}`);
+    }
     return new Float32Array(readback.getMappedRange())[0];
   } finally {
     readback.destroy?.();
@@ -226,12 +214,9 @@ export async function evaluateBoth(
   return { glsl, wgsl };
 }
 
-/** Release the browser and the GPU device held open across evaluations. */
+/** Release the browser and the graphics device held open across evaluations. */
 export async function closeEvaluators(): Promise<void> {
-  if (browser) { await browser.close(); browser = undefined; }
-  // The device holds native resources; leaving it open kept them alive for the
-  // rest of the process even though nothing could reach it any more.
-  if (device) { device.destroy?.(); device = undefined; }
+  await releaseGpu();
 }
 
 /**
