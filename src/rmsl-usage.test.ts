@@ -1643,6 +1643,30 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(glsl).toContain("layout(location=1) out");
   });
 
+  // WGSL's uniform address space takes host-shareable types only, so a bool
+  // travels as an unsigned integer and is compared back on read. A single bool
+  // uniform already did that; an array of them did not, and reached WGSL
+  // declared as an array of bool, which it refuses.
+  it("carries an array of booleans through a host-shareable type", () => {
+    let prog = Fn(() => uniformArray("bool", 4).element(int(1)).toVar());
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).not.toContain("array<bool");
+    expect(wgsl).toContain("u32");
+    // The caller asked for a bool and gets one back.
+    expect(wgsl).toMatch(/!= 0u\)/);
+    expect(wgsl).toMatch(/var \S+: bool =/);
+
+    // GLSL has no such restriction and declares the array directly.
+    expect(compileGLSL(prog())).toMatch(/uniform bool \S+\[4\];/);
+  });
+
+  it("carries an array of boolean vectors the same way", () => {
+    let prog = Fn(() => uniformArray("bvec3", 2).element(int(0)).all().toVar());
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).not.toContain("array<vec3<bool>");
+    expect(wgsl).toMatch(/var \S+: bool =/);
+  });
+
   it("rejects a nonsensical array length", () => {
     expect(() => uniformArray("vec4", 0)).toThrow(/positive integer/);
     expect(() => uniformArray("vec4", -3)).toThrow(/positive integer/);

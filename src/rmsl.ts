@@ -2195,11 +2195,22 @@ export interface WgslUniformMember {
  *
  * The same approach TSL takes, where it is called the padded type.
  */
-const WGSL_ARRAY_PADDING: Record<string, { stored: string; read: string }> = {
-  f32: { stored: "vec4<f32>", read: ".x" },
-  i32: { stored: "vec4<i32>", read: ".x" },
-  u32: { stored: "vec4<u32>", read: ".x" },
-  "vec2<f32>": { stored: "vec4<f32>", read: ".xy" },
+const WGSL_ARRAY_PADDING: Record<
+  string,
+  { stored: string; read: (element: string) => string }
+> = {
+  f32: { stored: "vec4<f32>", read: e => `${e}.x` },
+  i32: { stored: "vec4<i32>", read: e => `${e}.x` },
+  u32: { stored: "vec4<u32>", read: e => `${e}.x` },
+  "vec2<f32>": { stored: "vec4<f32>", read: e => `${e}.xy` },
+  // A bool is not host-shareable at all, so it travels as an unsigned integer
+  // and is compared back, the same substitution a single bool uniform makes.
+  // Reading is a comparison rather than a suffix, which is why these are
+  // written as functions.
+  bool: { stored: "vec4<u32>", read: e => `(${e}.x != 0u)` },
+  "vec2<bool>": { stored: "vec4<u32>", read: e => `(${e}.xy != vec2<u32>(0u))` },
+  "vec3<bool>": { stored: "vec4<u32>", read: e => `(${e}.xyz != vec3<u32>(0u))` },
+  "vec4<bool>": { stored: "vec4<u32>", read: e => `(${e} != vec4<u32>(0u))` },
 };
 
 /** How a member is written in the struct: `array<T, N>` for arrays, else `T`. */
@@ -2415,11 +2426,12 @@ function compileWGSLNode(
       // back out of the leading components — the padding never reaches the
       // caller, who asked for a float and gets a float.
       let elementType = wgslType((node.params![0] as any)?._t);
-      let read = WGSL_ARRAY_PADDING[elementType]?.read ?? "";
+      let element = `${arr.expr}[${indexExpr}]`;
+      let read = WGSL_ARRAY_PADDING[elementType]?.read;
       return {
         decls: [...arr.decls, ...index.decls],
         body: [...arr.body, ...index.body],
-        expr: `${arr.expr}[${indexExpr}]${read}`,
+        expr: read ? read(element) : element,
       };
     }
 
