@@ -1221,6 +1221,47 @@ function assertStageResult(
   );
 }
 
+/** Which component each accessor letter names, in both spellings. */
+const COMPONENT_INDEX: Record<string, number> = {
+  x: 0, y: 1, z: 2, w: 3,
+  r: 0, g: 1, b: 2, a: 3,
+};
+
+/**
+ * Resolve a chain of swizzles down to the variable underneath it.
+ *
+ * Only a variable can be assigned to. `a.xyz` is a value, so `a.xyz.xy = e`
+ * has to become a write to `a` — and which components of `a` that is takes
+ * composing the patterns: the outer pattern indexes into the inner one, so
+ * `a.yzw.xy` selects the first two of y, z, w, which is `a.yz`.
+ */
+function resolveSwizzleTarget(
+  target: any,
+): { base: BaseNode<ShaderType>; pattern: string } {
+  let pattern = target.value as string;
+  let base = target.params![0];
+  while (base?.type === "swizzle") {
+    let inner = base.value as string;
+    pattern = [...pattern].map(c => inner[COMPONENT_INDEX[c]]).join("");
+    base = base.params![0];
+  }
+  return { base, pattern };
+}
+
+/**
+ * The position is the vertex stage's output. A fragment stage cannot read it:
+ * GLSL's gl_Position is write-only there and WGSL has no such value at all.
+ * Emitting it anyway produced an identifier neither backend declares.
+ */
+function assertPositionIsReadable(ctx: CompileCtx): void {
+  if (ctx.shaderStage === "vertex") return;
+  throw new Error(
+    "[RMSL] builtinPosition() is the vertex stage's output position, and a "
+    + "fragment stage cannot read it. Pass the value you need through a "
+    + "varying() instead.",
+  );
+}
+
 function compileGLSLStage(
   node: BaseNode<ShaderType> | ShaderType extends never ? never : any,
   ctx: CompileCtx,
@@ -1333,6 +1374,7 @@ function compileGLSLNode(
     }
 
     case "builtinPosition": {
+      assertPositionIsReadable(ctx);
       return { decls: [], body: [], expr: "gl_Position" };
     }
 
@@ -2027,15 +2069,10 @@ function compileWGSLNode(
     }
 
     case "builtinPosition": {
-      // WGSL has no free-standing `position`: in a vertex stage it is a member
-      // of the output struct, and in a fragment stage it arrives as a
-      // parameter. GLSL's single readable/writable gl_Position has no direct
-      // equivalent, so the vertex stage resolves to the struct member.
-      return {
-        decls: [],
-        body: [],
-        expr: ctx.shaderStage === "vertex" ? "result.position" : "position",
-      };
+      // WGSL has no free-standing `position`; in a vertex stage it is a member
+      // of the output struct.
+      assertPositionIsReadable(ctx);
+      return { decls: [], body: [], expr: "result.position" };
     }
 
     case "builtinFragDepth": {
@@ -2254,21 +2291,35 @@ function compileWGSLNode(
       // first, otherwise an expression with side effects would run once per
       // component.
       let target = node.params![0] as any;
-      let pattern: string | undefined =
-        target?.type === "swizzle" ? (target.value as string) : undefined;
 
       // The swizzle itself is never compiled here — it would emit the very
       // `v.xy` form WGSL rejects, and any statements it produced would be
-      // dropped along with it. The base is compiled instead.
-      if (pattern && pattern.length > 1) {
-        let base = compileWGSLStage(target.params![0], ctx);
+      // dropped along with it. The chain is resolved to the variable
+      // underneath it, and the base compiled instead.
+      if (target?.type === "swizzle") {
+        let resolved = resolveSwizzleTarget(target);
+        let base = compileWGSLStage(resolved.base, ctx);
+
+        // A single component is directly assignable, so it needs no splitting.
+        if (resolved.pattern.length === 1) {
+          return {
+            decls: [...base.decls, ...rhs.decls],
+            body: [
+              ...base.body,
+              ...rhs.body,
+              `${base.expr}.${resolved.pattern} = ${rhs.expr};`,
+            ],
+            expr: base.expr,
+          };
+        }
+
         let temp = `_rmsl_sw${ctx.nextId++}`;
         let rhsType = wgslType((node.params![1] as any)?._t ?? "float");
         let lines = [
           ...base.body,
           ...rhs.body,
           `var ${temp}: ${rhsType} = ${rhs.expr};`,
-          ...[...pattern].map(
+          ...[...resolved.pattern].map(
             (component, i) => `${base.expr}.${component} = ${temp}[${i}];`,
           ),
         ];

@@ -1203,6 +1203,37 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(compileGLSL(prog())).toContain("mod(");
   });
 
+  // WGSL makes a single component assignable but not a multi-component
+  // swizzle, so the write is split per component. Splitting only looked at the
+  // immediate base, so a swizzle of a swizzle re-emitted the very form the
+  // split exists to avoid — a.xyz is a value, and its .x cannot be assigned.
+  it("resolves a nested swizzle down to the variable it writes to", () => {
+    let prog = Fn(() => {
+      let a = vec4(1, 2, 3, 4).toVar();
+      a.xyz.xy.assign(vec2(9, 9));
+      return a;
+    });
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).not.toMatch(/\.xyz\.[xyzw] = /);
+    expect(wgsl).toMatch(/_rmsl_\d+\.x = /);
+    expect(wgsl).toMatch(/_rmsl_\d+\.y = /);
+  });
+
+  // gl_Position is written by the vertex stage and is not readable in the
+  // fragment stage; WGSL has no free-standing `position` there either, and
+  // never emitted a parameter for one. Both produced an undeclared identifier.
+  it("refuses to read the position from a fragment stage", () => {
+    let prog = Fn(() => vec4(builtinPosition().x, 0, 0, 1).toVar());
+    expect(() => compileGLSL.fragment(prog())).toThrow(/fragment/i);
+    expect(() => compileWGSL.fragment(prog())).toThrow(/fragment/i);
+  });
+
+  it("still reads the position in a vertex stage", () => {
+    let prog = Fn(() => vec4(builtinPosition().x, 0, 0, 1).toVar());
+    expect(compileGLSL.vertex(prog())).toContain("gl_Position");
+    expect(compileWGSL.vertex(prog())).toContain("result.position");
+  });
+
   // WGSL's uniform address space takes host-shareable types only, and neither
   // a bool nor a boolean vector is one. A bool was already carried as a u32
   // and compared back on read; adding the boolean vector types to the type set
