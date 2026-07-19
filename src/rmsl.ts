@@ -2080,8 +2080,14 @@ function compileGLSLWithStage(
  * type, so the two cases are exactly the two the signature admits. Whether an
  * assignment actually happened is not something a signature can see, so that
  * half stays a run-time check.
+ *
+ * Several values may be returned at once, of which the last becomes the
+ * position. Their types are left open: an array literal is inferred as an array
+ * rather than a tuple, so no signature can say "the last of these is a vec4"
+ * about one, and demanding they all be would refuse programs that work. That
+ * case is checked when it compiles instead.
  */
-export type VertexRoot = Node<"vec4"> | Node<"vec4">[] | void;
+export type VertexRoot = Node<"vec4"> | Node<ShaderType>[] | void;
 
 export const compileGLSL: {
   (root: Node<ShaderType> | Node<ShaderType>[]): string;
