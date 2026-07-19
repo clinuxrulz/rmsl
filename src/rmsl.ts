@@ -2930,7 +2930,7 @@ export type CompileFnOptions = {
 };
 
 function compileFnBody(
-  result: Node<any>,
+  result: Node<ShaderType>,
   params: Array<{ name: string; type: ShaderType }>,
   name: string,
   language: "glsl" | "wgsl",
@@ -3030,7 +3030,7 @@ function compileFnBody(
 }
 
 export function compileGLSLFn(
-  fn: (...args: any[]) => Node<any>,
+  fn: (...args: any[]) => Node<ShaderType>,
   options: CompileFnOptions,
 ): string {
   const paramNodes = options.params.map(p => var_(p.name, p.type));
@@ -3039,7 +3039,7 @@ export function compileGLSLFn(
 }
 
 export function compileWGSLFn(
-  fn: (...args: any[]) => Node<any>,
+  fn: (...args: any[]) => Node<ShaderType>,
   options: CompileFnOptions,
 ): string {
   const paramNodes = options.params.map(p => var_(p.name, p.type));

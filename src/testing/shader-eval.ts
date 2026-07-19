@@ -61,7 +61,7 @@ function callExpr(args: number[]) {
 
 /** Compile, run and read back one float from the GLSL backend. */
 export async function evaluateGLSL(build: Build, args: number[] = []): Promise<number> {
-  const fn = compileGLSLFn(build as any, { name: "rmsl_eval", params: params(args.length) });
+  const fn = compileGLSLFn(build, { name: "rmsl_eval", params: params(args.length) });
   const source = `#version 300 es
 precision highp float;
 ${fn}
@@ -131,7 +131,7 @@ void main() { result = vec4(${callExpr(args)}, 0.0, 0.0, 1.0); }`;
 
 /** Compile, run and read back one float from the WGSL backend. */
 export async function evaluateWGSL(build: Build, args: number[] = []): Promise<number> {
-  const fn = compileWGSLFn(build as any, { name: "rmsl_eval", params: params(args.length) });
+  const fn = compileWGSLFn(build, { name: "rmsl_eval", params: params(args.length) });
   return runWGSL(`${fn}
 @group(0) @binding(0) var<storage, read_write> result: array<f32>;
 @compute @workgroup_size(1)

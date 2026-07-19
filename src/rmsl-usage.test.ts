@@ -1022,9 +1022,13 @@ ${glsl}
 void main(void) { outColor = vec4(scale(2.0)); }`);
   });
 
+  // Refused by the signature as well as at runtime. Written as a directive
+  // rather than a cast so both are asserted: a cast would silence the whole
+  // expression, and would keep passing if the signature ever stopped refusing.
   it("compileGLSLFn rejects a multi-return function", () => {
     expect(() =>
-      compileGLSLFn(() => [float(1), float(2)] as any, { name: "bad", params: [] }),
+      // @ts-expect-error a function compiled on its own returns a single value
+      compileGLSLFn(() => [float(1), float(2)], { name: "bad", params: [] }),
     ).toThrow(/multi-return/);
   });
 
