@@ -1978,17 +1978,26 @@ function compileWGSLNode(
     case "uniform": {
       let v = node.value as any;
       // WGSL restricts the uniform address space to host-shareable types, and
-      // bool is not one. GLSL allows `uniform bool`, so it is carried as u32
-      // and compared back on read — the difference stays inside the compiler.
-      let isBool = v?.shaderType === "bool";
+      // neither bool nor a boolean vector is one. GLSL allows both, so they are
+      // carried as unsigned integers and compared back on read — the difference
+      // stays inside the compiler. The comparison is component-wise for a
+      // vector, so it gives back a boolean vector of the same width.
+      let width = TYPE_WIDTH[v?.shaderType] ?? 1;
+      let isBoolean = v?.shaderType === "bool" || v?.shaderType?.startsWith("bvec");
+      let carrier = width === 1 ? "u32" : `vec${width}<u32>`;
+      let zero = width === 1 ? "0u" : `${carrier}(0u)`;
       if (v && v.id != null && !ctx.uniforms.has(v.id)) {
         ctx.uniforms.set(v.id, {
-          type: isBool ? "u32" : wgslType(v.shaderType),
+          type: isBoolean ? carrier : wgslType(v.shaderType),
           slot: v.slot,
         });
       }
       if (!v?.slot) return { decls: [], body: [], expr: "uniform<f32>" };
-      return { decls: [], body: [], expr: isBool ? `(${v.slot} != 0u)` : v.slot };
+      return {
+        decls: [],
+        body: [],
+        expr: isBoolean ? `(${v.slot} != ${zero})` : v.slot,
+      };
     }
 
     case "attribute": {

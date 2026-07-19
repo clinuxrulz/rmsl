@@ -1203,6 +1203,19 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(compileGLSL(prog())).toContain("mod(");
   });
 
+  // WGSL's uniform address space takes host-shareable types only, and neither
+  // a bool nor a boolean vector is one. A bool was already carried as a u32
+  // and compared back on read; adding the boolean vector types to the type set
+  // widened what a uniform accepts without widening that.
+  it("carries a boolean vector uniform through a host-shareable type", () => {
+    let prog = Fn(() => uniform("bvec3").all().toVar());
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).not.toContain("var<uniform> _rmsl_u0: vec3<bool>");
+    expect(wgsl).toContain("vec3<u32>");
+    // GLSL has no such restriction and declares it directly.
+    expect(compileGLSL(prog())).toContain("uniform bvec3");
+  });
+
   // A matrix column is a vector. The node inherited its operand's type, so it
   // claimed to be a matrix around an expression that produces a vector, and the
   // declaration it generated did not compile in either backend. The signature
