@@ -147,6 +147,25 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
     await expectValue(sumTo as any, [0], 0);    // condition false on entry
   }, 60_000);
 
+  // A loop whose update does two things: advance the counter, and tally
+  // alongside it. Both run four times, so the tally ends at 4. WGSL's loop
+  // header holds one statement, and the others were being dropped — which left
+  // the tally at 0 here, and hung the GPU when the counter was the one lost.
+  it("runs every statement of a loop update", async () => {
+    const tallyLoop = () => Fn(() => {
+      const tally = float(0).toVar();
+      For(
+        () => float(0).toVar(),
+        (i) => i.lessThan(4),
+        (i) => { tally.assign(tally.add(1)); i.assign(i.add(1)); },
+        (i) => { tally.assign(tally.add(0)); },
+      );
+      return tally;
+    })();
+
+    await expectValue(tallyLoop as any, [], 4);
+  }, 60_000);
+
   it("takes the branch the condition selects", async () => {
     const branch = (x: Node<"float">) => Fn(() => {
       const out = float(0).toVar();

@@ -1214,16 +1214,22 @@ function mkNode(config: { _t?: string; type: string; params?: BaseNode<ShaderTyp
  * WGSL's grammar allows exactly one update statement, so callers there keep
  * the last.
  */
-function forUpdateExpr(
-  update: { body: string[]; expr: string },
-  form: "comma" | "single",
-): string {
-  // "0.0" is the compiler's stand-in for "no value". WGSL requires the update
-  // slot to be a statement, so a bare literal there is a parse error; both
-  // grammars accept the slot being empty instead.
-  if (update.body.length === 0) return update.expr === "0.0" ? "" : update.expr;
-  let statements = update.body.map(s => s.endsWith(";") ? s.slice(0, -1) : s);
-  return form === "comma" ? statements.join(", ") : statements[statements.length - 1];
+function forUpdateStatements(update: CompiledNode): string[] {
+  // A nested block cannot go in either language's update slot: GLSL's takes an
+  // expression, and accepting one in WGSL alone would make a program that runs
+  // on one backend and not the other.
+  if (update.body.some(line => line.includes("{"))) {
+    throw new Error(
+      "[RMSL] A for-loop's update cannot contain a block. Move the branch into "
+      + "the loop body, or write the loop with While.",
+    );
+  }
+  return update.body;
+}
+
+/** Drop a trailing semicolon, for the slots that take an expression. */
+function withoutSemicolon(statement: string): string {
+  return statement.endsWith(";") ? statement.slice(0, -1) : statement;
 }
 
 /**
@@ -1653,7 +1659,7 @@ function compileGLSLNode(
         body: [
           ...initBody,
           ...cond.body,
-          `for (${initExpr}; ${cond.expr}; ${forUpdateExpr(update, "comma")}) {`,
+          `for (${initExpr}; ${cond.expr}; ${forUpdateStatements(update).map(withoutSemicolon).join(", ")}) {`,
           ...body.body.map(l => "  " + l),
           "}",
         ],
@@ -2444,11 +2450,40 @@ function compileWGSLNode(
           initBody = init.body.slice(0, -1);
         }
       }
+      let updates = forUpdateStatements(update);
+      let decls = [...init.decls, ...cd.decls, ...update.decls, ...body.decls];
+
+      // WGSL's for-header holds a single update statement. More than one goes
+      // in a continuing block instead, which runs after the body on every
+      // iteration — including after a continue, which appending them to the
+      // body would not.
+      if (updates.length > 1) {
+        return {
+          decls,
+          body: [
+            ...initBody,
+            "{",
+            `  ${initExpr};`,
+            "  loop {",
+            ...cd.body.map(l => "    " + l),
+            `    if (!(${cd.expr})) { break; }`,
+            ...body.body.map(l => "    " + l),
+            "    continuing {",
+            ...updates.map(l => "      " + l),
+            "    }",
+            "  }",
+            "}",
+          ],
+          expr: "0.0",
+        };
+      }
+
+      let header = updates.length === 1 ? withoutSemicolon(updates[0]) : "";
       return {
-        decls: [...init.decls, ...cd.decls, ...update.decls, ...body.decls],
+        decls,
         body: [
           ...initBody,
-          `for (${initExpr}; ${cd.expr}; ${forUpdateExpr(update, "single")}) {`,
+          `for (${initExpr}; ${cd.expr}; ${header}) {`,
           ...body.body.map(l => "  " + l),
           "}",
         ],

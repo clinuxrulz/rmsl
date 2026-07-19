@@ -1243,6 +1243,62 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(compileGLSL(prog())).toContain("mod(");
   });
 
+  // A loop's update clause can do more than one thing. GLSL joins them with
+  // the comma operator; WGSL's grammar allows a single statement there, and the
+  // rest were being dropped. The two backends then computed different answers
+  // from one program, and if the counter happened to be written first it was
+  // the counter that vanished — leaving a loop that never ends and a GPU that
+  // stops responding.
+  function twoStepLoop(counterFirst: boolean) {
+    return Fn(() => {
+      let other = float(0).toVar();
+      let total = float(0).toVar();
+      For(
+        () => float(0).toVar(),
+        (i) => i.lessThan(4),
+        (i) => {
+          if (counterFirst) { i.assign(i.add(1)); other.assign(other.add(1)); }
+          else { other.assign(other.add(1)); i.assign(i.add(1)); }
+        },
+        (i) => { total.assign(total.add(i)); },
+      );
+      return total;
+    });
+  }
+
+  it("keeps every statement of a loop update in both backends", () => {
+    for (let counterFirst of [false, true]) {
+      let label = counterFirst ? "counter first" : "counter last";
+
+      let glsl = compileGLSL(twoStepLoop(counterFirst)());
+      let glslHeader = glsl.split("\n").find(l => l.includes("for ("))!;
+      expect(glslHeader, label).toMatch(/\+ 1\.0\).*,.*\+ 1\.0\)/);
+
+      // WGSL takes one statement in the header, so more than one moves into a
+      // continuing block — which runs after the body, including after continue.
+      let wgsl = compileWGSL(twoStepLoop(counterFirst)());
+      expect(wgsl.match(/\+ 1f\)/g) ?? [], label).toHaveLength(2);
+      expect(wgsl, label).toContain("continuing");
+    }
+  });
+
+  // The ordinary single-statement loop keeps the plain for-header it had.
+  it("leaves a single-statement loop update in the header", () => {
+    let prog = Fn(() => {
+      let total = float(0).toVar();
+      For(
+        () => float(0).toVar(),
+        (i) => i.lessThan(4),
+        (i) => i.assign(i.add(1)),
+        (i) => { total.assign(total.add(i)); },
+      );
+      return total;
+    });
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).toMatch(/for \(var \S+: f32 = 0f; .*; \S+ = \(\S+ \+ 1f\)\)/);
+    expect(wgsl).not.toContain("continuing");
+  });
+
   // A plain JavaScript number has no shader type of its own, so it takes the
   // type of the operand it sits beside. Arithmetic learned that; comparisons
   // did not, so an unsigned operand was compared against a signed literal and
