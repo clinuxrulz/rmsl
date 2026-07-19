@@ -71,27 +71,23 @@ void main() { result = vec4(${callExpr(args)}, 0.0, 0.0, 1.0); }`;
   const page = await gpuPage();
   {
     return await page.evaluate((fragment: string) => {
-      // The rendering context, its float target and its vertex buffer are the
-      // same for every expression, so they are built once and kept on the page.
-      // Only the program below differs per call.
-      const cache = globalThis as any;
-      if (!cache.__rmslGL) {
-        const context = document.createElement("canvas").getContext("webgl2")!;
-        if (!context.getExtension("EXT_color_buffer_float")) {
-          throw new Error("EXT_color_buffer_float unavailable; cannot read float output");
-        }
-        const texture = context.createTexture();
-        context.bindTexture(context.TEXTURE_2D, texture);
-        context.texImage2D(context.TEXTURE_2D, 0, context.RGBA32F, 1, 1, 0, context.RGBA, context.FLOAT, null);
-        const framebuffer = context.createFramebuffer();
-        context.bindFramebuffer(context.FRAMEBUFFER, framebuffer);
-        context.framebufferTexture2D(context.FRAMEBUFFER, context.COLOR_ATTACHMENT0, context.TEXTURE_2D, texture, 0);
-        const vertices = context.createBuffer();
-        context.bindBuffer(context.ARRAY_BUFFER, vertices);
-        context.bufferData(context.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), context.STATIC_DRAW);
-        cache.__rmslGL = context;
+      // A fresh context per call. The page is what is expensive to stand up —
+      // opening and navigating one cost around 130ms — and keeping a context
+      // alive across calls turned out to be unreliable: SwiftShader drops it
+      // now and again, and every later call in the run then fails.
+      const gl = document.createElement("canvas").getContext("webgl2")!;
+      if (!gl.getExtension("EXT_color_buffer_float")) {
+        throw new Error("EXT_color_buffer_float unavailable; cannot read float output");
       }
-      const gl = cache.__rmslGL as WebGL2RenderingContext;
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 1, 0, gl.RGBA, gl.FLOAT, null);
+      const framebuffer = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+      const vertices = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vertices);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
 
       // Compiled inline rather than through a helper: the bundler renames
       // functions and injects a `__name` shim that does not exist in the page.
@@ -104,7 +100,7 @@ void main() { result = vec4(${callExpr(args)}, 0.0, 0.0, 1.0); }`;
         gl.shaderSource(shader, src);
         gl.compileShader(shader);
         if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-          throw new Error(gl.getShaderInfoLog(shader) ?? "shader failed to compile");
+          throw new Error(gl.getShaderInfoLog(shader) || "shader failed to compile");
         }
         gl.attachShader(program, shader);
       }
@@ -114,8 +110,6 @@ void main() { result = vec4(${callExpr(args)}, 0.0, 0.0, 1.0); }`;
       }
       gl.useProgram(program);
 
-      // The buffer is already bound and filled; only the attribute binding
-      // belongs to this program.
       const location = gl.getAttribLocation(program, "p");
       gl.enableVertexAttribArray(location);
       gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
@@ -124,6 +118,7 @@ void main() { result = vec4(${callExpr(args)}, 0.0, 0.0, 1.0); }`;
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       const out = new Float32Array(4);
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, out);
+
       return out[0];
     }, source);
   }
