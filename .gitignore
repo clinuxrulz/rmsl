@@ -34,3 +34,4 @@ reports/
 
 # Git worktrees (checkouts, not source)
 .worktrees/
+.claude/worktrees/
