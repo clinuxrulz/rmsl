@@ -267,8 +267,16 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   notEqual(other: any) { return comp("notEqual", this, other); }
 
   // === VecCommonOps ===
-  dot(other: any): any { return op("dot", this, other); }
-  length(): any { return op1("length", this); }
+  dot(other: any): any {
+    let r = op("dot", this, other);
+    r._t = "float";
+    return r;
+  }
+  length(): any {
+    let r = op1("length", this);
+    r._t = "float";
+    return r;
+  }
   normalize(): any { return op1("normalize", this); }
   distance(other: any): any { return op("distance", this, other); }
   reflect(normal: any): any { return op("reflect", this, normal); }
