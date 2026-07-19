@@ -1179,6 +1179,30 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(wgsl).toMatch(/for \(var _rmsl_\d+: f32 = 0f;/);
   });
 
+  // A floored modulus has to be written out for WGSL, whose % truncates. Doing
+  // that inline repeats both operands twice each, so the cost of an expensive
+  // operand is paid four times over. A helper is a plain expression, so it fits
+  // anywhere the operator did — including a loop header, where a bound
+  // temporary could not go.
+  it("emits a modulus helper rather than repeating its operands", () => {
+    let prog = Fn(() => uniform("float").mod(2).toVar());
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).toContain("fn _rmsl_mod_float(");
+
+    let main = wgsl.slice(wgsl.indexOf("@fragment"));
+    expect(main).toMatch(/_rmsl_mod_float\(\S+, 2f\)/);
+    expect(main.match(/_rmsl_u\d+/g) ?? [], "operand used once").toHaveLength(1);
+  });
+
+  it("uses the width-matched modulus helper for vectors", () => {
+    let prog = Fn(() => uniform("vec3").mod(2).toVar());
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).toContain("fn _rmsl_mod_vec3(");
+    expect(wgsl).toContain("_rmsl_mod_vec3(");
+    // GLSL keeps its own builtin, which needs no helper.
+    expect(compileGLSL(prog())).toContain("mod(");
+  });
+
   // Folding runs on literal operands; the integer branch truncates with `| 0`.
   it("folds integer arithmetic with truncation", () => {
     expect(compileGLSL(Fn(() => int(7).div(int(2)).toVar())())).toContain("= 3;");

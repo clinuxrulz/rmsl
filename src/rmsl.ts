@@ -581,7 +581,7 @@ const VALUE_OPERAND: Record<string, number> = {
  * it would produce `refract(vec3, vec3, vec3)`, which neither language has.
  */
 const UNIFORM_OPERAND_OPS = new Set([
-  "step", "smoothstep", "clamp", "min", "max", "pow",
+  "step", "smoothstep", "clamp", "min", "max", "pow", "mod",
 ]);
 
 function op(type: string, ...args: any[]): Node<ShaderType> {
@@ -2051,17 +2051,16 @@ function compileWGSLNode(
       }
       // WGSL's % truncates toward zero, GLSL's mod() floors, and floored is
       // what this operation is named for — the result takes the sign of the
-      // divisor. Written out so both backends compute the same number for a
-      // negative operand. The operands are pure expressions, so repeating them
-      // is safe, and doing it inline keeps this usable inside a loop header
-      // where a bound temporary could not be emitted.
-      let lhs = compileWGSLStage(node.params![0], ctx);
-      let rhs = compileWGSLStage(node.params![1], ctx);
-      return {
-        decls: [...lhs.decls, ...rhs.decls],
-        body: [...lhs.body, ...rhs.body],
-        expr: `(${lhs.expr} - ${rhs.expr} * floor(${lhs.expr} / ${rhs.expr}))`,
-      };
+      // divisor. A helper carries that, rather than the subtraction being
+      // written inline: inline repeats both operands twice each, so an
+      // expensive operand is evaluated four times. A call is an ordinary
+      // expression, so it still fits wherever the operator did.
+      let helper = `_rmsl_mod_${operandType}`;
+      if (helper in WGSL_HELPERS) {
+        ctx.wgslHelpers.add(helper);
+        return binaryWGSL(node, ctx, helper, true);
+      }
+      return binaryWGSL(node, ctx, "%");
     }
     case "pow": return binaryWGSL(node, ctx, "pow", true);
     case "min": return binaryWGSL(node, ctx, "min", true);
@@ -2356,6 +2355,20 @@ function compileWGSLNode(
  * same formulation as the mat4Inverse used on the JS side.
  */
 const WGSL_HELPERS: Record<string, string> = {
+  // A floored modulus, which is what GLSL's mod() computes and what WGSL's %
+  // does not. One per width, because the operands are broadcast to match.
+  _rmsl_mod_float: `fn _rmsl_mod_float(x: f32, y: f32) -> f32 {
+  return x - y * floor(x / y);
+}`,
+  _rmsl_mod_vec2: `fn _rmsl_mod_vec2(x: vec2<f32>, y: vec2<f32>) -> vec2<f32> {
+  return x - y * floor(x / y);
+}`,
+  _rmsl_mod_vec3: `fn _rmsl_mod_vec3(x: vec3<f32>, y: vec3<f32>) -> vec3<f32> {
+  return x - y * floor(x / y);
+}`,
+  _rmsl_mod_vec4: `fn _rmsl_mod_vec4(x: vec4<f32>, y: vec4<f32>) -> vec4<f32> {
+  return x - y * floor(x / y);
+}`,
   _rmsl_inverse3: `fn _rmsl_inverse3(m: mat3x3<f32>) -> mat3x3<f32> {
   let a00 = m[0][0]; let a01 = m[0][1]; let a02 = m[0][2];
   let a10 = m[1][0]; let a11 = m[1][1]; let a12 = m[1][2];
