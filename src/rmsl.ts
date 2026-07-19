@@ -371,7 +371,16 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   multVec4(other: any): any {
     return node({ _t: "vec4", type: "matVecMul", params: [this as BaseNode<ShaderType>, wrapValue(other) as BaseNode<ShaderType>] });
   }
-  element(i: any): any { return op("matrixElement", this, i); }
+  // The argument is an index, so a plain number is an integer whatever the
+  // matrix is made of. Left to op() it would be typed from the first operand,
+  // which is the matrix, and emitted as a float — m[int(0.0)].
+  element(i: any): any {
+    return op(
+      "matrixElement",
+      this,
+      typeof i === "number" ? node({ _t: "int", type: "int", value: i | 0 }) : i,
+    );
+  }
   inverse() { return op1("inverse", this); }
   transpose() { return op1("transpose", this); }
 
@@ -542,11 +551,25 @@ function wrapValue<V>(x: V): Node<ExtractType<V>> {
  * declarations, the scalar-vs-vector split in comparison codegen) picks the
  * wrong branch.
  */
-const REDUCING_OPS: Record<string, string> = {
+const REDUCING_OPS: Record<string, string | ((operandType: string) => string)> = {
   dot: "float",
   length: "float",
   distance: "float",
+  // A matrix column, so it has as many components as the matrix has rows —
+  // a mat2x3 is two columns of three, and indexing it gives a vec3. Expressed
+  // as a function because unlike the others it depends on the operand.
+  matrixElement: (operandType) => {
+    let shape = MATRIX_DIMENSIONS[operandType];
+    return shape === undefined ? "float" : `vec${shape[1]}`;
+  },
 };
+
+/** The result type of an op, given the type of the operand that defines it. */
+function resultType(op: string, operandType: string): string {
+  let reducing = REDUCING_OPS[op];
+  if (reducing === undefined) return operandType;
+  return typeof reducing === "function" ? reducing(operandType) : reducing;
+}
 
 /** Component count per type, for the operations whose width follows it. */
 const TYPE_WIDTH: Record<string, number> = {
@@ -614,13 +637,13 @@ function op(type: string, ...args: any[]): Node<ShaderType> {
     );
   }
 
-  return node({ _t: REDUCING_OPS[type] ?? valueT, type, params });
+  return node({ _t: resultType(type, valueT), type, params });
 }
 
 function op1(type: string, a: any): Node<ShaderType> {
   let wrapped = wrapValue(a) as BaseNode<ShaderType>;
   let t = (wrapped as any)?._t || "float";
-  return node({ _t: REDUCING_OPS[type] ?? t, type, params: [wrapped] });
+  return node({ _t: resultType(type, t), type, params: [wrapped] });
 }
 
 /**

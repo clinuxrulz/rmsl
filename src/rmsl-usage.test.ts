@@ -1203,6 +1203,28 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(compileGLSL(prog())).toContain("mod(");
   });
 
+  // A matrix column is a vector. The node inherited its operand's type, so it
+  // claimed to be a matrix around an expression that produces a vector, and the
+  // declaration it generated did not compile in either backend. The signature
+  // has always said Node<"vec4">; only the runtime type disagreed.
+  it("types a matrix element as the column vector it is", () => {
+    let prog4 = Fn(() => uniform("mat4").element(0).toVar());
+    expect(compileGLSL(prog4())).toMatch(/vec4 \S+ = \S+\[\S+\];/);
+    expect(compileWGSL(prog4())).toMatch(/var \S+: vec4<f32> = \S+\[\S+\];/);
+
+    let prog3 = Fn(() => uniform("mat3").element(1).toVar());
+    expect(compileGLSL(prog3())).toMatch(/vec3 \S+ = \S+\[\S+\];/);
+    expect(compileWGSL(prog3())).toMatch(/var \S+: vec3<f32> = \S+\[\S+\];/);
+  });
+
+  // The index is an integer, so it has to be emitted as one. Typing it from
+  // the matrix operand left it a float and produced m[int(0.0)].
+  it("indexes a matrix with an integer", () => {
+    let prog = Fn(() => uniform("mat4").element(0).toVar());
+    expect(compileGLSL(prog())).not.toContain("int(0.0)");
+    expect(compileWGSL(prog())).not.toContain("i32(0f)");
+  });
+
   // WGSL has no inverse() builtin, so one is written out per matrix size. The
   // helper was chosen by testing for mat3 and falling back to mat4, so a mat2
   // was inverted by the four-by-four helper and the call matched nothing.
