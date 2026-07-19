@@ -2133,10 +2133,20 @@ function compileWGSLNode(
     case "transpose": return unaryWGSL(node, ctx, "transpose");
     case "inverse": {
       // No inverse() builtin in WGSL, so the helper is pulled in on demand.
+      // Chosen by the matrix's size: testing for mat3 and falling back to mat4
+      // meant a mat2 was inverted by the four-by-four helper, and the call
+      // matched no overload. Only a square matrix has an inverse, which is why
+      // GLSL has no overload for the rest either.
       let operand = compileWGSLStage(node.params![0], ctx);
-      let helper = (node.params![0] as any)?._t === "mat3"
-        ? "_rmsl_inverse3"
-        : "_rmsl_inverse4";
+      let operandType = (node.params![0] as any)?._t;
+      let shape = MATRIX_DIMENSIONS[operandType];
+      if (shape === undefined || shape[0] !== shape[1]) {
+        throw new Error(
+          `[RMSL] inverse() needs a square matrix, but this one is `
+          + `${operandType ?? "untyped"}.`,
+        );
+      }
+      let helper = `_rmsl_inverse${shape[0]}`;
       ctx.wgslHelpers.add(helper);
       return {
         decls: operand.decls,
@@ -2368,6 +2378,14 @@ const WGSL_HELPERS: Record<string, string> = {
 }`,
   _rmsl_mod_vec4: `fn _rmsl_mod_vec4(x: vec4<f32>, y: vec4<f32>) -> vec4<f32> {
   return x - y * floor(x / y);
+}`,
+  _rmsl_inverse2: `fn _rmsl_inverse2(m: mat2x2<f32>) -> mat2x2<f32> {
+  let det = m[0][0] * m[1][1] - m[0][1] * m[1][0];
+  let inv = 1.0 / det;
+  return mat2x2<f32>(
+    vec2<f32>(m[1][1] * inv, -m[0][1] * inv),
+    vec2<f32>(-m[1][0] * inv, m[0][0] * inv),
+  );
 }`,
   _rmsl_inverse3: `fn _rmsl_inverse3(m: mat3x3<f32>) -> mat3x3<f32> {
   let a00 = m[0][0]; let a01 = m[0][1]; let a02 = m[0][2];

@@ -1203,6 +1203,23 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(compileGLSL(prog())).toContain("mod(");
   });
 
+  // WGSL has no inverse() builtin, so one is written out per matrix size. The
+  // helper was chosen by testing for mat3 and falling back to mat4, so a mat2
+  // was inverted by the four-by-four helper and the call matched nothing.
+  //
+  // mat2 carries no typed operations yet — NodeOps maps it to {} — but
+  // NodeImpl implements inverse() for it, so this is reachable today.
+  it("uses the inverse helper matching the matrix size", () => {
+    let wgsl2 = compileWGSL(Fn(() => (uniform("mat2") as any).inverse().toVar())());
+    expect(wgsl2).toContain("fn _rmsl_inverse2(");
+    expect(wgsl2).not.toContain("_rmsl_inverse4");
+
+    expect(compileWGSL(Fn(() => uniform("mat3").inverse().toVar())()))
+      .toContain("fn _rmsl_inverse3(");
+    expect(compileWGSL(Fn(() => uniform("mat4").inverse().toVar())()))
+      .toContain("fn _rmsl_inverse4(");
+  });
+
   // Folding runs on literal operands; the integer branch truncates with `| 0`.
   it("folds integer arithmetic with truncation", () => {
     expect(compileGLSL(Fn(() => int(7).div(int(2)).toVar())())).toContain("= 3;");
