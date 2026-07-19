@@ -2155,11 +2155,26 @@ const WGSL_LAYOUT: Record<string, { size: number; align: number }> = {
   "vec2<f32>": { size: 8, align: 8 },
   "vec3<f32>": { size: 12, align: 16 },
   "vec4<f32>": { size: 16, align: 16 },
-  "vec2<bool>": { size: 8, align: 8 },
-  "vec3<bool>": { size: 12, align: 16 },
-  "vec4<bool>": { size: 16, align: 16 },
+  // The carriers. A bool is not host-shareable, so it travels as an unsigned
+  // integer of the same width, and a narrow array element travels widened —
+  // both of which arrive here as the type they are stored as.
+  "vec2<u32>": { size: 8, align: 8 },
+  "vec3<u32>": { size: 12, align: 16 },
+  "vec4<u32>": { size: 16, align: 16 },
+  "vec2<i32>": { size: 8, align: 8 },
+  "vec3<i32>": { size: 12, align: 16 },
+  "vec4<i32>": { size: 16, align: 16 },
+  // A matCxR is C columns of vecR, and each column takes a whole multiple of
+  // its own alignment — so a column of three floats occupies sixteen bytes,
+  // not twelve.
   "mat2x2<f32>": { size: 16, align: 8 },
+  "mat2x3<f32>": { size: 32, align: 16 },
+  "mat2x4<f32>": { size: 32, align: 16 },
+  "mat3x2<f32>": { size: 24, align: 8 },
   "mat3x3<f32>": { size: 48, align: 16 },
+  "mat3x4<f32>": { size: 48, align: 16 },
+  "mat4x2<f32>": { size: 32, align: 8 },
+  "mat4x3<f32>": { size: 64, align: 16 },
   "mat4x4<f32>": { size: 64, align: 16 },
 };
 
@@ -2240,16 +2255,39 @@ export function wgslUniformLayout(
   // in its own 16-byte slot. Callers writing the buffer need the stride, not
   // just the element size.
   const shapeOf = (m: { type: string; length?: number }) => {
-    const base = WGSL_LAYOUT[m.type] ?? { size: 4, align: 4 };
+    // An element too narrow to align is stored widened, so its footprint
+    // follows what it is stored as rather than what it was declared as.
+    const stored = m.length === undefined
+      ? m.type
+      : WGSL_ARRAY_PADDING[m.type]?.stored ?? m.type;
+    const base = WGSL_LAYOUT[stored];
+    // Guessing here is the worst thing this function could do. A wrong size is
+    // not a shader that fails to build, it is one that reads whatever happens
+    // to lie at that address, and the caller has no way to notice.
+    if (base === undefined) {
+      throw new Error(
+        `[RMSL] no uniform layout is known for ${m.type}. Its size and`
+        + ` alignment have to be added to WGSL_LAYOUT before it can be packed`
+        + ` into a uniform buffer.`,
+      );
+    }
     if (m.length === undefined) return { ...base, stride: base.size };
     const stride = Math.ceil(base.size / 16) * 16;
     return { size: stride * m.length, align: Math.max(base.align, 16), stride };
   };
 
-  const ordered = [...members].sort((a, b) => {
-    const byAlign = shapeOf(b).align - shapeOf(a).align;
-    return byAlign !== 0 ? byAlign : a.slot.localeCompare(b.slot);
-  });
+  // Widest alignment first, so the gaps between members stay small. Members
+  // that align the same keep the order they were declared in: the tie used to
+  // be broken on the generated slot name, which carries a counter climbing for
+  // the life of the process, so the same program compiled twice could put its
+  // values at different addresses.
+  const ordered = members
+    .map((m, declaredAt) => ({ m, declaredAt }))
+    .sort((a, b) => {
+      const byAlign = shapeOf(b.m).align - shapeOf(a.m).align;
+      return byAlign !== 0 ? byAlign : a.declaredAt - b.declaredAt;
+    })
+    .map(({ m }) => m);
 
   const out: WgslUniformMember[] = [];
   let offset = 0;
@@ -2265,10 +2303,11 @@ export function wgslUniformLayout(
     });
     offset += size;
   }
-  // A uniform struct is itself aligned to its largest member.
-  const structAlign = ordered.reduce(
-    (a, m) => Math.max(a, WGSL_LAYOUT[m.type]?.align ?? 4), 4,
-  );
+  // A uniform struct is itself aligned to its largest member, and an array
+  // member aligns to sixteen whatever it holds — so this has to ask for the
+  // member's real alignment rather than its element type's, or the struct comes
+  // out shorter than the buffer the shader reads.
+  const structAlign = ordered.reduce((a, m) => Math.max(a, shapeOf(m).align), 4);
   return { members: out, size: Math.ceil(offset / structAlign) * structAlign };
 }
 

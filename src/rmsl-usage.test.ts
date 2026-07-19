@@ -1688,6 +1688,58 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(layout.size).toBe(32);
   });
 
+  // The caller writes the buffer from these numbers, so a wrong one is not a
+  // shader that fails to build — it is a shader that reads whatever happens to
+  // be at that address. None of these fail loudly, which is why each is pinned.
+  it("sizes a matrix that is not square", () => {
+    // A matCxR is C columns of vecR, and a column is padded to its alignment,
+    // so a mat2x3 is two columns of sixteen bytes rather than two of twelve.
+    let layout = wgslUniformLayout([
+      { slot: "m", type: "mat2x3<f32>" },
+      { slot: "v", type: "vec4<f32>" },
+    ]);
+    let m = layout.members.find(x => x.name === "m")!;
+    expect(m.size, "two columns of sixteen").toBe(32);
+    expect(layout.size).toBe(48);
+  });
+
+  it("refuses a type it has no layout for, rather than guessing", () => {
+    expect(() => wgslUniformLayout([{ slot: "x", type: "mat9x9<f32>" }]))
+      .toThrow(/layout/i);
+  });
+
+  // An array's alignment is raised to sixteen whatever it holds, and the struct
+  // takes its alignment from its members — so the struct's own size has to
+  // account for that, or the buffer is short.
+  it("rounds the struct up to an array member's alignment", () => {
+    let layout = wgslUniformLayout([
+      { slot: "a", type: "f32", length: 3 },
+      { slot: "b", type: "f32" },
+    ]);
+    expect(layout.members.find(x => x.name === "a")!.size, "three slots of 16").toBe(48);
+    expect(layout.size, "rounded up to sixteen").toBe(64);
+  });
+
+  // Members that align the same are kept in the order they were declared. The
+  // tie was broken on the generated slot name, which carries a counter that
+  // climbs for the life of the process — so "…u10" sorted before "…u9" and the
+  // same program compiled twice put its values at different addresses.
+  it("orders equally aligned members by declaration, not by name", () => {
+    let byName = wgslUniformLayout([
+      { slot: "_rmsl_u9", type: "f32" },
+      { slot: "_rmsl_u10", type: "f32" },
+    ]);
+    expect(byName.members.map(m => m.name)).toEqual(["_rmsl_u9", "_rmsl_u10"]);
+    expect(byName.members.map(m => m.offset)).toEqual([0, 4]);
+  });
+
+  it("gives a boolean array the footprint of what it travels as", () => {
+    let layout = wgslUniformLayout([{ slot: "flags", type: "bool", length: 4 }]);
+    let flags = layout.members.find(m => m.name === "flags")!;
+    expect(flags.stride, "widened to a four-component vector").toBe(16);
+    expect(flags.size).toBe(64);
+  });
+
   it("gives a single uniform offset zero", () => {
     let layout = wgslUniformLayout([{ slot: "only", type: "vec4<f32>" }]);
     expect(layout.members).toEqual([
