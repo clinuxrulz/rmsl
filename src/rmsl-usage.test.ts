@@ -1079,7 +1079,7 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
   });
 
   it("compiles every matrix type, including the non-square ones", () => {
-    let cases: [string, any, number][] = [
+    let cases: [string, (...v: number[]) => any, number][] = [
       ["mat2", mat2, 4], ["mat2x3", mat2x3, 6], ["mat2x4", mat2x4, 8],
       ["mat3x2", mat3x2, 6], ["mat3", mat3, 9], ["mat3x4", mat3x4, 12],
       ["mat4x2", mat4x2, 8], ["mat4x3", mat4x3, 12], ["mat4", mat4, 16],
@@ -1394,14 +1394,27 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(compileWGSL(prog())).not.toContain("i32(0f)");
   });
 
+  // Transposing swaps columns for rows, so the result type changes for a
+  // matrix that is not square. Only the square types were reachable before, and
+  // they keep their own type, so the runtime never had to get this right.
+  it("types a non-square transpose with its shape swapped", () => {
+    let prog = Fn(() => uniform("mat2x3").transpose().toVar());
+    expect(compileGLSL(prog())).toMatch(/mat3x2 \S+ = transpose\(/);
+    expect(compileWGSL(prog())).toMatch(/var \S+: mat3x2<f32> = transpose\(/);
+  });
+
+  it("multiplies a non-square matrix by a vector of its column count", () => {
+    let prog = Fn(() => uniform("mat2x3").mult(vec2(1, 2)).toVar());
+    expect(compileGLSL(prog())).toMatch(/vec3 \S+ = /);
+    expect(compileWGSL(prog())).toMatch(/var \S+: vec3<f32> = /);
+  });
+
   // WGSL has no inverse() builtin, so one is written out per matrix size. The
   // helper was chosen by testing for mat3 and falling back to mat4, so a mat2
   // was inverted by the four-by-four helper and the call matched nothing.
   //
-  // mat2 carries no typed operations yet — NodeOps maps it to {} — but
-  // NodeImpl implements inverse() for it, so this is reachable today.
   it("uses the inverse helper matching the matrix size", () => {
-    let wgsl2 = compileWGSL(Fn(() => (uniform("mat2") as any).inverse().toVar())());
+    let wgsl2 = compileWGSL(Fn(() => uniform("mat2").inverse().toVar())());
     expect(wgsl2).toContain("fn _rmsl_inverse2(");
     expect(wgsl2).not.toContain("_rmsl_inverse4");
 

@@ -77,6 +77,44 @@ describe("operations whose value operand is not the first", () => {
   });
 });
 
+describe("matrix operations", () => {
+  // Every matrix type carries these at runtime, but only the two square ones
+  // were declared to, so the rest had to be reached through a cast — which
+  // switches off checking for the whole expression rather than just the method.
+  it("gives every matrix type the operations the compiler implements", () => {
+    expectTypeOf(uniform("mat2").transpose()).toEqualTypeOf<Node<"mat2">>();
+    expectTypeOf(uniform("mat2").inverse()).toEqualTypeOf<Node<"mat2">>();
+    expectTypeOf(uniform("mat4").inverse()).toEqualTypeOf<Node<"mat4">>();
+  });
+
+  // A matCxR has C columns of R rows, so one of its columns is a vecR.
+  it("types a column by the matrix's row count", () => {
+    expectTypeOf(uniform("mat2").element(0)).toEqualTypeOf<Node<"vec2">>();
+    expectTypeOf(uniform("mat2x3").element(0)).toEqualTypeOf<Node<"vec3">>();
+    expectTypeOf(uniform("mat3x2").element(0)).toEqualTypeOf<Node<"vec2">>();
+    expectTypeOf(uniform("mat4x3").element(0)).toEqualTypeOf<Node<"vec3">>();
+  });
+
+  // Transposing swaps the two, so a matCxR becomes a matRxC.
+  it("swaps the shape when transposing a non-square matrix", () => {
+    expectTypeOf(uniform("mat2x3").transpose()).toEqualTypeOf<Node<"mat3x2">>();
+    expectTypeOf(uniform("mat4x2").transpose()).toEqualTypeOf<Node<"mat2x4">>();
+  });
+
+  // Multiplying takes one component per column and gives one per row.
+  it("types a matrix times a vector by the matrix's shape", () => {
+    expectTypeOf(uniform("mat2x3").mult(vec2(1, 2))).toEqualTypeOf<Node<"vec3">>();
+    expectTypeOf(uniform("mat3x2").mult(vec3(1, 2, 3))).toEqualTypeOf<Node<"vec2">>();
+    expectTypeOf(uniform("mat4").mult(vec4(1, 2, 3, 4))).toEqualTypeOf<Node<"vec4">>();
+  });
+
+  // Only a square matrix has an inverse, and the compiler refuses the rest.
+  it("offers no inverse on a non-square matrix", () => {
+    // @ts-expect-error a matrix that is not square cannot be inverted
+    uniform("mat2x3").inverse();
+  });
+});
+
 describe("declared variables", () => {
   // A uniform carries its type's operations directly, alongside its name.
   it("carries both a name and the operations of its type", () => {

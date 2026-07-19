@@ -108,17 +108,17 @@ interface NodeOps {
   bvec2: BoolVecOps<"bvec2">;
   bvec3: BoolVecOps<"bvec3">;
   bvec4: BoolVecOps<"bvec4">;
-  mat2: {};
-  mat2x3: {};
-  mat2x4: {};
-  mat3x2: {};
-  mat3: MatOps<"mat3">;
-  mat3x4: {};
-  mat4x2: {};
-  mat4x3: {};
-  mat4: MatOps<"mat4">;
+  mat2: MatOps<"mat2", "vec2">;
+  mat2x3: RectMatOps<"vec2", "vec3", "mat3x2">;
+  mat2x4: RectMatOps<"vec2", "vec4", "mat4x2">;
+  mat3x2: RectMatOps<"vec3", "vec2", "mat2x3">;
+  mat3: MatOps<"mat3", "vec3">;
+  mat3x4: RectMatOps<"vec3", "vec4", "mat4x3">;
+  mat4x2: RectMatOps<"vec4", "vec2", "mat2x4">;
+  mat4x3: RectMatOps<"vec4", "vec3", "mat3x4">;
+  mat4: MatOps<"mat4", "vec4">;
   sampler2D: SamplerOps;
-  samplerCube: {};
+  samplerCube: CubeSamplerOps;
   void: {};
 }
 
@@ -203,15 +203,46 @@ interface Vec3Ops {
   cross(other: Node<"vec3">): Node<"vec3">;
 }
 
-interface MatOps<A extends "mat3" | "mat4"> {
-  mult(other: Node<A>): Node<A>;
-  mult(other: Node<"vec3">): Node<"vec3">;
-  mult(other: Node<"vec4">): Node<"vec4">;
+/**
+ * A square matrix. `Vec` is the vector of its own width: what one of its
+ * columns is, and what multiplying it by a vector both takes and gives.
+ */
+interface MatOps<Self extends ShaderType, Vec extends ShaderType> {
+  mult(other: Node<Self>): Node<Self>;
+  mult(other: Node<Vec>): Node<Vec>;
   multVec(other: Node<"vec3">): Node<"vec3">;
   multVec4(other: Node<"vec4">): Node<"vec4">;
-  element(i: IntLike): Node<A extends "mat3" ? "vec3" : "vec4">;
-  inverse(): Node<A>;
-  transpose(): Node<A>;
+  element(i: IntLike): Node<Vec>;
+  inverse(): Node<Self>;
+  transpose(): Node<Self>;
+}
+
+/**
+ * A matrix that is not square. A matCxR holds C columns of R rows, so it
+ * multiplies a vecC to give a vecR, one of its columns is a vecR, and
+ * transposing it gives a matRxC.
+ *
+ * There is deliberately no inverse: only a square matrix has one, and neither
+ * target language offers the overload.
+ *
+ * Written out per type rather than derived from `Self` with conditionals. A
+ * conditional that resolves to a `Node` makes the checker expand the whole
+ * intersection at every use, which is what exhausted its heap before.
+ */
+interface RectMatOps<
+  Operand extends ShaderType,
+  Column extends ShaderType,
+  Transposed extends ShaderType,
+> {
+  mult(other: Node<Operand>): Node<Column>;
+  element(i: IntLike): Node<Column>;
+  transpose(): Node<Transposed>;
+}
+
+/** A cube map is sampled with a direction rather than a surface coordinate. */
+interface CubeSamplerOps {
+  texture(coords: Vec3Like): Node<"vec4">;
+  textureLod(coords: Vec3Like, lod: FloatLike): Node<"vec4">;
 }
 
 interface IntOps {
@@ -301,8 +332,20 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   add(other: any): any { return op("add", this, other); }
   sub(other: any): any { return op("sub", this, other); }
   mult(other: any): any {
-    if ((this._t === "mat3" || this._t === "mat4") && (other._t === "vec3" || other._t === "vec4")) {
-      return node({ _t: other._t, type: "matVecMul", params: [this as BaseNode<ShaderType>, wrapValue(other) as BaseNode<ShaderType>] });
+    // A matCxR times a vecC gives a vecR. Left to op() the result would take
+    // the matrix's type, and the widths were previously checked only for the
+    // two square types, which let a mat3 times a vec4 through as well.
+    let shape = MATRIX_DIMENSIONS[this._t];
+    let otherType = other?._t;
+    if (
+      shape !== undefined && typeof otherType === "string"
+      && otherType.startsWith("vec") && TYPE_WIDTH[otherType] === shape[0]
+    ) {
+      return node({
+        _t: `vec${shape[1]}`,
+        type: "matVecMul",
+        params: [this as BaseNode<ShaderType>, wrapValue(other) as BaseNode<ShaderType>],
+      });
     }
     return op("mult", this, other);
   }
@@ -558,6 +601,15 @@ const REDUCING_OPS: Record<string, string | ((operandType: string) => string)> =
   // A matrix column, so it has as many components as the matrix has rows —
   // a mat2x3 is two columns of three, and indexing it gives a vec3. Expressed
   // as a function because unlike the others it depends on the operand.
+  // Transposing swaps columns for rows, so a matCxR becomes a matRxC. A square
+  // matrix keeps its type, which is why this went unnoticed while only the
+  // square types were reachable.
+  transpose: (operandType) => {
+    let shape = MATRIX_DIMENSIONS[operandType];
+    if (shape === undefined) return operandType;
+    let [columns, rows] = shape;
+    return columns === rows ? operandType : `mat${rows}x${columns}`;
+  },
   matrixElement: (operandType) => {
     let shape = MATRIX_DIMENSIONS[operandType];
     return shape === undefined ? "float" : `vec${shape[1]}`;
