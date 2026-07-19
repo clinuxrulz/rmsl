@@ -1000,6 +1000,13 @@ export function uniformArray<T extends ShaderType>(
   if (!Number.isInteger(length) || length < 1) {
     throw new Error(`[RMSL] uniformArray length must be a positive integer, got ${length}`);
   }
+  if (shaderType === "sampler2D" || shaderType === "samplerCube") {
+    throw new Error(
+      `[RMSL] uniformArray cannot hold a texture. WGSL has no array of them in`
+      + ` the uniform address space, so there is no spelling both backends`
+      + ` share. Declare each texture on its own.`,
+    );
+  }
   let id = nextUniformId++;
   let slot = `_rmsl_u${id}`;
   const arrayNode = node({
@@ -2247,6 +2254,15 @@ function wgslMemberType(m: WgslUniformMember): string {
  * no padding between them, and the offsets are returned because a caller
  * writing the buffer has no other way to know them.
  */
+/**
+ * Whether a uniform is a texture, which cannot go in the uniform address space
+ * and keeps a binding of its own. Asked in both places that emit uniforms, so
+ * the two cannot disagree about it.
+ */
+function isWgslTexture(type: string): boolean {
+  return type === "texture_2d<f32>" || type === "texture_cube<f32>";
+}
+
 export function wgslUniformLayout(
   members: { slot: string; type: string; length?: number }[],
 ): { members: WgslUniformMember[]; size: number } {
@@ -3126,10 +3142,8 @@ function compileWGSLWithStage(
 
   // Textures keep their own bindings; everything else goes in one struct,
   // because WGSL allows only 12 uniform buffers per stage.
-  let textures = sortedUniforms.filter(([, i]) =>
-    i.type === "texture_2d<f32>" || i.type === "texture_cube<f32>");
-  let plain = sortedUniforms.filter(([, i]) =>
-    i.type !== "texture_2d<f32>" && i.type !== "texture_cube<f32>");
+  let textures = sortedUniforms.filter(([, i]) => isWgslTexture(i.type));
+  let plain = sortedUniforms.filter(([, i]) => !isWgslTexture(i.type));
 
   for (let [, info] of textures) {
     lines.push(`@group(1) @binding(${texBinding++}) var ${info.slot}: ${info.type};`);
@@ -3370,9 +3384,24 @@ function compileFnBody(
     // Same single-struct packing as a full shader, for the same reason: one
     // binding per uniform runs out at twelve.
     let sortedUniforms = [...ctx.uniforms.entries()].sort((a, b) => a[1].slot.localeCompare(b[1].slot));
-    if (sortedUniforms.length > 0) {
+    // A texture is sampled through a companion sampler, so both are declared
+    // or neither resolves. The whole-shader path does the same, in the same
+    // binding groups.
+    let samplerDecls = "";
+    let samplerBinding = 0;
+    ctx.wgslSamplers.forEach((info) => {
+      samplerDecls += `@group(2) @binding(${samplerBinding++}) var ${info.samplerSlot}: sampler;\n`;
+    });
+    let textureDecls = "";
+    let texBinding = 0;
+    for (let [, info] of sortedUniforms.filter(([, i]) => isWgslTexture(i.type))) {
+      textureDecls += `@group(1) @binding(${texBinding++}) var ${info.slot}: ${info.type};\n`;
+    }
+    if (textureDecls || samplerDecls) code = textureDecls + samplerDecls + "\n" + code;
+    let plainUniforms = sortedUniforms.filter(([, i]) => !isWgslTexture(i.type));
+    if (plainUniforms.length > 0) {
       let layout = wgslUniformLayout(
-        sortedUniforms.map(([, i]) => ({ slot: i.slot, type: i.type, length: i.length })),
+        plainUniforms.map(([, i]) => ({ slot: i.slot, type: i.type, length: i.length })),
       );
       let struct = `struct ${WGSL_UNIFORM_STRUCT} {\n`
         + layout.members.map(m => `  ${m.name}: ${wgslMemberType(m)},\n`).join("")

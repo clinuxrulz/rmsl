@@ -1667,6 +1667,28 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(wgsl).toMatch(/var \S+: bool =/);
   });
 
+  // A texture cannot live in a uniform block — it is not host-shareable — so
+  // the whole-shader path gives it a binding of its own. The standalone
+  // function path packed everything it had, textures included.
+  it("keeps a texture out of the uniform struct in a standalone function", () => {
+    let wgsl = compileWGSLFn(() => uniform("sampler2D").texture(vec2(0.5, 0.5)), {
+      name: "sample", params: [],
+    });
+    expect(wgsl).toMatch(/var \S+: texture_2d<f32>;/);
+    expect(wgsl).not.toMatch(/struct \S+ \{[^}]*texture_2d/s);
+
+    recordShaderSource("wgsl", "fragment", `${wgsl}
+@fragment fn main() -> @location(0) vec4<f32> { return sample(); }`);
+  });
+
+  // Neither backend has a way to express this that the other shares: WGSL has
+  // no plain array of textures in the uniform address space, and emitting one
+  // produced a reference to a struct that does not hold it.
+  it("refuses an array of textures", () => {
+    expect(() => uniformArray("sampler2D", 2)).toThrow(/texture|sampler/i);
+    expect(() => uniformArray("samplerCube", 2)).toThrow(/texture|sampler/i);
+  });
+
   it("rejects a nonsensical array length", () => {
     expect(() => uniformArray("vec4", 0)).toThrow(/positive integer/);
     expect(() => uniformArray("vec4", -3)).toThrow(/positive integer/);
