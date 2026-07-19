@@ -51,6 +51,19 @@ computes the answer before codegen runs.
 Add a case here when operands could plausibly be emitted in the wrong order:
 `min`/`max`, the edge order in `step(edge, x)`.
 
+**Types.** `src/rmsl.test-d.ts` asserts what the signatures promise, with
+`expectTypeOf`. Several defects here were a signature saying one thing while
+the node was another — a comparison declared as returning a single boolean
+while building a boolean vector — which no runtime assertion can see.
+
+```bash
+pnpm test:types    # just these
+pnpm type-check    # catches them too, as ordinary type errors
+```
+
+Add a case whenever an operation's result type is not simply its receiver's:
+anything that reduces, anything whose defining operand is not the first.
+
 ### Skipping the GPU layers
 
 Both GPU-backed layers can be turned off, which is what makes a fast inner loop
