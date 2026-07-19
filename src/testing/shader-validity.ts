@@ -25,7 +25,9 @@
  */
 
 import { expect } from "vitest";
-import { compileGLSL, compileWGSL } from "../rmsl";
+import {
+  compileGLSL, compileWGSL, type Node, type ShaderType, type VertexRoot,
+} from "../rmsl";
 import { compileGLSLInPage, gpuDevice, releaseGpu } from "./gpu";
 
 // This file only ever runs under vitest, in Node. Declared here rather than
@@ -128,19 +130,26 @@ export function recordShaderSource(
   return src;
 }
 
-/** Shape of `compileGLSL` / `compileWGSL`: callable, with vertex/fragment. */
+/**
+ * Shape of `compileGLSL` / `compileWGSL`: callable, with vertex and fragment.
+ *
+ * Mirrors the real signatures rather than taking anything. These stand-ins are
+ * what the tests import, so typing them loosely would mean no test in that file
+ * was checked on what it hands a compiler — the aliasing that buys every test a
+ * real driver would have cost it the type checker.
+ */
 interface Compiler {
-  (root: any): string;
-  vertex(root: any): string;
-  fragment(root: any): string;
+  (root: Node<ShaderType> | Node<ShaderType>[]): string;
+  vertex(root: VertexRoot): string;
+  fragment(root: Node<ShaderType> | Node<ShaderType>[]): string;
 }
 
 function wrap(lang: ShaderLang): Compiler {
   return Object.assign(
-    (root: any) => recordBoth(root, "fragment", lang),
+    (root: Node<ShaderType> | Node<ShaderType>[]) => recordBoth(root, "fragment", lang),
     {
-      vertex: (root: any) => recordBoth(root, "vertex", lang),
-      fragment: (root: any) => recordBoth(root, "fragment", lang),
+      vertex: (root: VertexRoot) => recordBoth(root as any, "vertex", lang),
+      fragment: (root: Node<ShaderType> | Node<ShaderType>[]) => recordBoth(root, "fragment", lang),
     },
   );
 }

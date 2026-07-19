@@ -1301,19 +1301,28 @@ function assertStageResult(
   lastType: string | undefined,
   positionWritten: boolean,
 ): void {
-  // Whether a stage produced a value is a question about its type, not about
-  // the text it compiled to. Asking the text meant comparing against "0.0",
-  // which is also how GLSL spells the number zero, so a vertex shader returning
-  // zero was read as returning nothing and slipped through.
-  if (shaderStage !== "vertex" || lastType === undefined || lastType === "void") return;
-  if (lastType === "vec4") return;
+  if (shaderStage !== "vertex") return;
   // The program set the position itself, so its result has nowhere it needs to
-  // go and can be anything.
+  // go and can be anything, including nothing.
   if (positionWritten) return;
+  // Otherwise the result becomes the position, and has to be able to.
+  if (lastType === "vec4") return;
+  // Returning nothing used to end the check here, on the reading that there was
+  // no result to object to. But a vertex stage has to produce a position one
+  // way or the other, and one that does neither compiles to a main that sets no
+  // position at all — the shader-that-draws-nothing this exists to catch.
+  //
+  // Whether a stage produced a value is a question about its type, not the text
+  // it compiled to. Asking the text meant comparing against "0.0", which is
+  // also how GLSL spells zero, so a vertex shader returning zero was read as
+  // returning nothing and slipped through.
   throw new Error(
-    `[RMSL] A vertex shader's result becomes its position, which is a vec4, but `
-    + `this one returns ${lastType ?? "an untyped value"}. `
-    + `Wrap it — for example vec4(value, 1.0).`,
+    `[RMSL] A vertex shader has to produce a position. This one `
+    + (lastType === undefined || lastType === "void"
+      ? `returns nothing and never assigns builtinPosition(). Return a vec4, or `
+        + `assign builtinPosition() yourself.`
+      : `returns ${lastType}, which cannot become one. Wrap it — for example `
+        + `vec4(value, 1.0).`),
   );
 }
 
@@ -1955,14 +1964,30 @@ function compileGLSLWithStage(
   return lines.join("\n");
 }
 
+/**
+ * What a vertex stage may be handed.
+ *
+ * Its result becomes the position, so a vec4 is the ordinary case, and anything
+ * else is refused here rather than at run time.
+ *
+ * Void is the other way to satisfy a vertex stage: assign builtinPosition()
+ * yourself and return nothing. A function whose body returns nothing has that
+ * type, so the two cases are exactly the two the signature admits. Whether an
+ * assignment actually happened is not something a signature can see, so that
+ * half stays a run-time check.
+ */
+export type VertexRoot = Node<"vec4"> | Node<"vec4">[] | void;
+
 export const compileGLSL: {
   (root: Node<ShaderType> | Node<ShaderType>[]): string;
-  vertex(root: Node<ShaderType> | Node<ShaderType>[]): string;
+  vertex(root: VertexRoot): string;
   fragment(root: Node<ShaderType> | Node<ShaderType>[]): string;
 } = Object.assign(
   (root: Node<ShaderType> | Node<ShaderType>[]) => compileGLSLWithStage(root, "fragment"),
   {
-    vertex: (root: Node<ShaderType> | Node<ShaderType>[]) => compileGLSLWithStage(root, "vertex"),
+    // The value is always a node; void only describes a body that returned
+    // nothing, which still compiles to one.
+    vertex: (root: VertexRoot) => compileGLSLWithStage(root as Node<ShaderType>, "vertex"),
     fragment: (root: Node<ShaderType> | Node<ShaderType>[]) => compileGLSLWithStage(root, "fragment"),
   },
 );
@@ -2912,12 +2937,12 @@ function compileWGSLWithStage(
 
 export const compileWGSL: {
   (root: Node<ShaderType> | Node<ShaderType>[]): string;
-  vertex(root: Node<ShaderType> | Node<ShaderType>[]): string;
+  vertex(root: VertexRoot): string;
   fragment(root: Node<ShaderType> | Node<ShaderType>[]): string;
 } = Object.assign(
   (root: Node<ShaderType> | Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
   {
-    vertex: (root: Node<ShaderType> | Node<ShaderType>[]) => compileWGSLWithStage(root, "vertex"),
+    vertex: (root: VertexRoot) => compileWGSLWithStage(root as Node<ShaderType>, "vertex"),
     fragment: (root: Node<ShaderType> | Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
   },
 );

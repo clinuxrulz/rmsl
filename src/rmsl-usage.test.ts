@@ -552,10 +552,9 @@ describe("RMSL", () => {
   });
 
   it("builtinFragDepth() throws in vertex shader", () => {
-    let prog = Fn(() => {
-      let fd = builtinFragDepth();
-      return fd;
-    });
+    // A valid position, so the depth builtin is the only thing left to object
+    // to — otherwise this would be refused for two reasons at once.
+    let prog = Fn(() => vec4(builtinFragDepth(), 0, 0, 1).toVar());
     expect(() => compileGLSL.vertex(prog())).toThrow("builtinFragDepth");
     expect(() => compileWGSL.vertex(prog())).toThrow("builtinFragDepth");
   });
@@ -575,8 +574,10 @@ describe("RMSL", () => {
   // Skipping the write instead would link cleanly and draw nothing.
   it("rejects a vertex shader whose result is not a vec4", () => {
     let prog = Fn(() => vec3(1, 2, 3).toVar());
-    expect(() => compileGLSL.vertex(prog())).toThrow(/vertex shader's result/);
-    expect(() => compileWGSL.vertex(prog())).toThrow(/vertex shader's result/);
+    // @ts-expect-error a vec3 cannot become a position
+    expect(() => compileGLSL.vertex(prog())).toThrow(/vertex shader/);
+    // @ts-expect-error a vec3 cannot become a position
+    expect(() => compileWGSL.vertex(prog())).toThrow(/vertex shader/);
   });
 
   // "No result" was recognised by comparing the emitted text against "0.0",
@@ -585,15 +586,18 @@ describe("RMSL", () => {
   // position — the draw-nothing failure the check exists to prevent — while the
   // same program was refused by WGSL, which spells zero differently.
   it("rejects a vertex result of zero, like any other non-position", () => {
+    // @ts-expect-error a float cannot become a position, zero included
     expect(() => compileGLSL.vertex(Fn(() => float(0))()))
-      .toThrow(/vertex shader's result/);
+      .toThrow(/vertex shader/);
+    // @ts-expect-error a float cannot become a position, zero included
     expect(() => compileWGSL.vertex(Fn(() => float(0))()))
-      .toThrow(/vertex shader's result/);
+      .toThrow(/vertex shader/);
   });
 
   it("rejects a vertex result that folds to zero", () => {
+    // @ts-expect-error a folded zero is still a float
     expect(() => compileGLSL.vertex(Fn(() => float(2).sub(float(2)))()))
-      .toThrow(/vertex shader's result/);
+      .toThrow(/vertex shader/);
   });
 
   // Writing the position explicitly is the documented way to set it. The check
@@ -603,7 +607,6 @@ describe("RMSL", () => {
   it("allows a vertex shader that writes the position itself", () => {
     let build = () => Fn(() => {
       builtinPosition().assign(vec4(1, 2, 3, 4));
-      return float(1.0);
     });
     let glsl = compileGLSL.vertex(build()());
     expect(glsl.match(/gl_Position = /g) ?? [], "written once").toHaveLength(1);
@@ -615,8 +618,19 @@ describe("RMSL", () => {
 
   // With no explicit write, the result still has to be able to become one.
   it("still requires a position when the shader writes none", () => {
+    // @ts-expect-error a float cannot become a position
     expect(() => compileGLSL.vertex(Fn(() => float(1))()))
-      .toThrow(/vertex shader's result/);
+      .toThrow(/vertex shader/);
+  });
+
+  // Returning nothing was treated as "there is no result to check", but a
+  // vertex shader still has to produce a position somehow. One that returns
+  // nothing and never writes one compiles to a main that sets no position at
+  // all — the same shader-that-draws-nothing the check exists to catch.
+  it("rejects a vertex shader that produces no position at all", () => {
+    let prog = Fn(() => { float(1).toVar(); });
+    expect(() => compileGLSL.vertex(prog())).toThrow(/vertex shader/);
+    expect(() => compileWGSL.vertex(prog())).toThrow(/vertex shader/);
   });
 
   // A fragment shader with no colour output is legal, so this stays permitted.

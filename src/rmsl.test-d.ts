@@ -12,7 +12,8 @@
 
 import { describe, it, expectTypeOf } from "vitest";
 import {
-  float, vec2, vec3, vec4, int, uniform, mat3, mat4, type Node,
+  Fn, float, vec2, vec3, vec4, int, uniform, mat3, mat4,
+  compileGLSL, compileWGSL, type Node,
 } from "./rmsl";
 
 describe("comparison result types", () => {
@@ -74,6 +75,36 @@ describe("operations whose value operand is not the first", () => {
     expectTypeOf(vec3(1, 2, 3).step(0.5)).toEqualTypeOf<Node<"vec3">>();
     expectTypeOf(vec3(1, 2, 3).smoothstep(0, 1)).toEqualTypeOf<Node<"vec3">>();
     expectTypeOf(float(1).step(0.5)).toEqualTypeOf<Node<"float">>();
+  });
+});
+
+describe("what a vertex stage accepts", () => {
+  // Its result becomes the position, so anything that cannot be one is refused
+  // where it is written rather than when the compiler runs.
+  it("takes a vec4 result", () => {
+    expectTypeOf(compileGLSL.vertex(Fn(() => vec4(1, 2, 3, 4).toVar())()))
+      .toEqualTypeOf<string>();
+  });
+
+  // The other way to satisfy it: assign the position and return nothing. A
+  // body that returns nothing has type void, which is why void is admitted.
+  it("takes a program that returns nothing", () => {
+    expectTypeOf(compileWGSL.vertex(Fn(() => { vec4(1, 2, 3, 4).toVar(); })()))
+      .toEqualTypeOf<string>();
+  });
+
+  it("refuses a result that cannot become a position", () => {
+    // @ts-expect-error a vec3 is not a position
+    compileGLSL.vertex(Fn(() => vec3(1, 2, 3).toVar())());
+    // @ts-expect-error a float is not a position
+    compileWGSL.vertex(Fn(() => float(1).toVar())());
+  });
+
+  // A fragment stage has no such requirement: a shader with no colour output is
+  // legal, so any result is allowed through.
+  it("puts no such requirement on a fragment stage", () => {
+    expectTypeOf(compileGLSL.fragment(Fn(() => float(1).toVar())()))
+      .toEqualTypeOf<string>();
   });
 });
 
