@@ -44,6 +44,17 @@ export type VariableNode<A extends ShaderType> = Node<A> & {
 // Aliases rather than interfaces: `Node<A>` resolves through an indexed access,
 // and an interface may only extend a type whose members are statically known.
 export type UniformNode<A extends ShaderType> = VariableNode<A>;
+
+/**
+ * A uniform array. Not a `Node<A>` itself — the array as a whole has no value,
+ * only its elements do, so it exposes `element()` rather than the operations of
+ * its element type.
+ */
+export interface UniformArrayNode<A extends ShaderType> {
+  readonly name: string;
+  readonly length: number;
+  element(index: IntLike | FloatLike): Node<A>;
+}
 export type AttributeNode<A extends ShaderType> = VariableNode<A>;
 export type VaryingNode<A extends ShaderType> = VariableNode<A>;
 
@@ -966,6 +977,47 @@ let nextUniformId = 0;
 let nextAttrId = 0;
 let nextVaryingId = 0;
 
+/**
+ * A uniform holding several values of one type.
+ *
+ * Declaring N separate uniforms instead costs N slots, and WGSL allows only 12
+ * uniform buffers per stage; an array is one slot however long it is. It also
+ * lets the shader loop over the elements rather than unrolling a test per
+ * value.
+ *
+ * The length is given rather than the values, since the host writes the
+ * contents by name — unlike TSL's `uniformArray(values, type)`, where the node
+ * owns the data.
+ *
+ *   const bricks = uniformArray("vec4", 24);
+ *   bricks.element(i)            // indexed by a node, inside a loop
+ *   bricks.element(3)            // or by a constant
+ */
+export function uniformArray<T extends ShaderType>(
+  shaderType: T,
+  length: number,
+): UniformArrayNode<T> {
+  if (!Number.isInteger(length) || length < 1) {
+    throw new Error(`[RMSL] uniformArray length must be a positive integer, got ${length}`);
+  }
+  let id = nextUniformId++;
+  let slot = `_rmsl_u${id}`;
+  const arrayNode = node({
+    _t: shaderType,
+    type: "uniformArray",
+    value: { id, slot, shaderType, length },
+    name: slot,
+  }) as any;
+  arrayNode.length = length;
+  arrayNode.element = (index: IntLike | FloatLike) =>
+    node({
+      _t: shaderType,
+      type: "uniformArrayElement",
+      params: [arrayNode, wrapValue(index) as BaseNode<ShaderType>],
+    });
+  return arrayNode as UniformArrayNode<T>;
+}
+
 export function uniform<T extends ShaderType>(shaderType: T): UniformNode<T> {
   let id = nextUniformId++;
   const result = node({
@@ -1146,7 +1198,8 @@ interface CompiledNode {
 interface CompileCtx {
   nextId: number;
   shaderStage: "vertex" | "fragment";
-  uniforms: Map<number, { type: string; slot: string }>;
+  /** `length` is set only for uniform arrays, and gives their element count. */
+  uniforms: Map<number, { type: string; slot: string; length?: number }>;
   attributes: Map<number, { type: string; slot: string }>;
   varyings: Map<number, { type: string; slot: string }>;
   outputs: Map<number, { type: string; slot: string; location: number }>;
@@ -1452,6 +1505,35 @@ function compileGLSLNode(
         ctx.uniforms.set(v.id, { type: glslType(v.shaderType), slot: v.slot });
       }
       return { decls: [], body: [], expr: v.slot };
+    }
+
+    case "uniformArray": {
+      // Registered on first reference like any uniform; `length` makes the
+      // declaration `uniform vec4 name[24];` rather than a single value.
+      let v = node.value as any;
+      if (!ctx.uniforms.has(v.id)) {
+        ctx.uniforms.set(v.id, {
+          type: glslType(v.shaderType),
+          slot: v.slot,
+          length: v.length,
+        });
+      }
+      return { decls: [], body: [], expr: v.slot };
+    }
+
+    case "uniformArrayElement": {
+      let arr = compileGLSLStage(node.params![0], ctx);
+      let index = compileGLSLStage(node.params![1], ctx);
+      // GLSL indexes with an int; a float loop counter has to be converted.
+      let indexType = (node.params![1] as any)?._t;
+      let indexExpr = indexType === "int" || indexType === "uint"
+        ? index.expr
+        : `int(${index.expr})`;
+      return {
+        decls: [...arr.decls, ...index.decls],
+        body: [...arr.body, ...index.body],
+        expr: `${arr.expr}[${indexExpr}]`,
+      };
     }
 
     case "attribute": {
@@ -1911,7 +1993,11 @@ function compileGLSLWithStage(
   lines.push("");
 
   ctx.uniforms.forEach((info) => {
-    lines.push(`uniform ${info.type} ${info.slot};`);
+    lines.push(
+      info.length !== undefined
+        ? `uniform ${info.type} ${info.slot}[${info.length}];`
+        : `uniform ${info.type} ${info.slot};`,
+    );
   });
   ctx.attributes.forEach((info) => {
     lines.push(`in ${info.type} ${info.slot};`);
@@ -2070,10 +2156,47 @@ const WGSL_LAYOUT: Record<string, { size: number; align: number }> = {
 export interface WgslUniformMember {
   /** Generated slot name, matching the `name` on the uniform node. */
   name: string;
+  /** Element type. For an array this is the element's type, not the array's. */
   type: string;
   /** Byte offset within the uniform buffer. */
   offset: number;
+  /** Bytes occupied in total, so an array's whole extent rather than one element. */
   size: number;
+  /** Element count, present only for a uniform array. */
+  length?: number;
+  /**
+   * Bytes between consecutive elements, present only for a uniform array.
+   *
+   * Not the same as the element size: WGSL rounds the stride of an array in
+   * the uniform address space up to 16, so `array<f32, 4>` spans 64 bytes with
+   * each element alone in its own slot.
+   */
+  stride?: number;
+}
+
+/**
+ * Element types that cannot be array members in WGSL's uniform address space,
+ * and what to store instead.
+ *
+ * Elements there must be 16-byte aligned. Dawn accepts `array<vec3<f32>, N>`
+ * — a vec3 aligns to 16 even though it occupies 12 — but rejects anything
+ * narrower, so f32, i32, u32 and vec2 are widened to a four-component vector
+ * and the value read back out of its leading components.
+ *
+ * The same approach TSL takes, where it is called the padded type.
+ */
+const WGSL_ARRAY_PADDING: Record<string, { stored: string; read: string }> = {
+  f32: { stored: "vec4<f32>", read: ".x" },
+  i32: { stored: "vec4<i32>", read: ".x" },
+  u32: { stored: "vec4<u32>", read: ".x" },
+  "vec2<f32>": { stored: "vec4<f32>", read: ".xy" },
+};
+
+/** How a member is written in the struct: `array<T, N>` for arrays, else `T`. */
+function wgslMemberType(m: WgslUniformMember): string {
+  if (m.length === undefined) return m.type;
+  const stored = WGSL_ARRAY_PADDING[m.type]?.stored ?? m.type;
+  return `array<${stored}, ${m.length}>`;
 }
 
 /**
@@ -2089,19 +2212,36 @@ export interface WgslUniformMember {
  * writing the buffer has no other way to know them.
  */
 export function wgslUniformLayout(
-  members: { slot: string; type: string }[],
+  members: { slot: string; type: string; length?: number }[],
 ): { members: WgslUniformMember[]; size: number } {
+  // An array in the uniform address space has its element stride rounded up to
+  // 16, so `array<f32, 4>` occupies 64 bytes rather than 16 — each element sits
+  // in its own 16-byte slot. Callers writing the buffer need the stride, not
+  // just the element size.
+  const shapeOf = (m: { type: string; length?: number }) => {
+    const base = WGSL_LAYOUT[m.type] ?? { size: 4, align: 4 };
+    if (m.length === undefined) return { ...base, stride: base.size };
+    const stride = Math.ceil(base.size / 16) * 16;
+    return { size: stride * m.length, align: Math.max(base.align, 16), stride };
+  };
+
   const ordered = [...members].sort((a, b) => {
-    const byAlign = (WGSL_LAYOUT[b.type]?.align ?? 4) - (WGSL_LAYOUT[a.type]?.align ?? 4);
+    const byAlign = shapeOf(b).align - shapeOf(a).align;
     return byAlign !== 0 ? byAlign : a.slot.localeCompare(b.slot);
   });
 
   const out: WgslUniformMember[] = [];
   let offset = 0;
   for (const m of ordered) {
-    const { size, align } = WGSL_LAYOUT[m.type] ?? { size: 4, align: 4 };
+    const { size, align, stride } = shapeOf(m);
     offset = Math.ceil(offset / align) * align;
-    out.push({ name: m.slot, type: m.type, offset, size });
+    out.push({
+      name: m.slot,
+      type: m.type,
+      offset,
+      size,
+      ...(m.length !== undefined ? { length: m.length, stride } : {}),
+    });
     offset += size;
   }
   // A uniform struct is itself aligned to its largest member.
@@ -2238,6 +2378,38 @@ function compileWGSLNode(
         decls: [],
         body: [],
         expr: isBoolean ? `(${ref} != ${zero})` : ref,
+      };
+    }
+
+    case "uniformArray": {
+      let v = node.value as any;
+      if (v && v.id != null && !ctx.uniforms.has(v.id)) {
+        ctx.uniforms.set(v.id, {
+          type: wgslType(v.shaderType),
+          slot: v.slot,
+          length: v.length,
+        });
+      }
+      return { decls: [], body: [], expr: `${WGSL_UNIFORM_BINDING}.${v.slot}` };
+    }
+
+    case "uniformArrayElement": {
+      let arr = compileWGSLStage(node.params![0], ctx);
+      let index = compileWGSLStage(node.params![1], ctx);
+      // WGSL indexes with i32 or u32; a float loop counter has to be converted.
+      let indexType = (node.params![1] as any)?._t;
+      let indexExpr = indexType === "int" || indexType === "uint"
+        ? index.expr
+        : `i32(${index.expr})`;
+      // An element too narrow to align is stored widened, so the value is read
+      // back out of the leading components — the padding never reaches the
+      // caller, who asked for a float and gets a float.
+      let elementType = wgslType((node.params![0] as any)?._t);
+      let read = WGSL_ARRAY_PADDING[elementType]?.read ?? "";
+      return {
+        decls: [...arr.decls, ...index.decls],
+        body: [...arr.body, ...index.body],
+        expr: `${arr.expr}[${indexExpr}]${read}`,
       };
     }
 
@@ -2902,9 +3074,11 @@ function compileWGSLWithStage(
     lines.push(`@group(1) @binding(${texBinding++}) var ${info.slot}: ${info.type};`);
   }
   if (plain.length > 0) {
-    let layout = wgslUniformLayout(plain.map(([, i]) => ({ slot: i.slot, type: i.type })));
+    let layout = wgslUniformLayout(
+      plain.map(([, i]) => ({ slot: i.slot, type: i.type, length: i.length })),
+    );
     lines.push(`struct ${WGSL_UNIFORM_STRUCT} {`);
-    for (let m of layout.members) lines.push(`  ${m.name}: ${m.type},`);
+    for (let m of layout.members) lines.push(`  ${m.name}: ${wgslMemberType(m)},`);
     lines.push("};");
     lines.push(`@group(0) @binding(0) var<uniform> ${WGSL_UNIFORM_BINDING}: ${WGSL_UNIFORM_STRUCT};`);
   }
@@ -3067,7 +3241,9 @@ function compileFnBody(
     const paramStr = params.map(p => `${glslType(p.type)} ${p.name}`).join(", ");
     let code = "";
     ctx.uniforms.forEach((info) => {
-      code += `uniform ${info.type} ${info.slot};\n`;
+      code += info.length !== undefined
+        ? `uniform ${info.type} ${info.slot}[${info.length}];\n`
+        : `uniform ${info.type} ${info.slot};\n`;
     });
     if (ctx.uniforms.size > 0) {
       code += "\n";
@@ -3129,10 +3305,10 @@ function compileFnBody(
     let sortedUniforms = [...ctx.uniforms.entries()].sort((a, b) => a[1].slot.localeCompare(b[1].slot));
     if (sortedUniforms.length > 0) {
       let layout = wgslUniformLayout(
-        sortedUniforms.map(([, i]) => ({ slot: i.slot, type: i.type })),
+        sortedUniforms.map(([, i]) => ({ slot: i.slot, type: i.type, length: i.length })),
       );
       let struct = `struct ${WGSL_UNIFORM_STRUCT} {\n`
-        + layout.members.map(m => `  ${m.name}: ${m.type},\n`).join("")
+        + layout.members.map(m => `  ${m.name}: ${wgslMemberType(m)},\n`).join("")
         + `};\n`
         + `@group(0) @binding(0) var<uniform> ${WGSL_UNIFORM_BINDING}: ${WGSL_UNIFORM_STRUCT};\n\n`;
       code = struct + code;

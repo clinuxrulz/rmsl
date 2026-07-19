@@ -5,7 +5,7 @@ import {
   If, For, While, discard, break_, continue_,
   uniform, attribute, varying, output, builtinPosition, builtinFragDepth,
   isUniformNode, isAttributeNode, isVaryingNode,
-  compileGLSLFn, compileWGSLFn, uniformRaw, wgslUniformLayout,
+  compileGLSLFn, compileWGSLFn, uniformRaw, wgslUniformLayout, uniformArray,
 } from "./rmsl";
 // Recording stand-ins for the real compilers: each returns the language it is
 // named for and additionally compiles the program to the other, so every shader
@@ -1524,6 +1524,93 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(layout.members.find(m => m.name === "c")!.size).toBe(12);
     // Struct is rounded up to its largest member's alignment.
     expect(layout.size).toBe(48);
+  });
+
+  // === Uniform arrays ===
+  //
+  // One slot however long, where N separate uniforms cost N slots — which is
+  // what made a 24-brick scene need 32 of them. It also lets the shader loop
+  // over the elements instead of unrolling a test per value.
+
+  it("declares a uniform array once and indexes it", () => {
+    let prog = Fn(() => {
+      let items = uniformArray("vec4", 24);
+      let total = vec4(0, 0, 0, 0).toVar();
+      For(
+        () => float(0).toVar(),
+        (i) => i.lessThan(24),
+        (i) => i.assign(i.add(1)),
+        (i) => { total.assign(total.add(items.element(i))); },
+      );
+      let out = output("vec4");
+      out.assign(total);
+      return out;
+    });
+
+    let glsl = compileGLSL(prog());
+    expect(glsl).toMatch(/uniform vec4 _rmsl_u\d+\[24\];/);
+    // GLSL indexes with an int, so a float loop counter is converted.
+    expect(glsl).toMatch(/_rmsl_u\d+\[int\(\S+\)\]/);
+
+    let wgsl = compileWGSL(prog());
+    expect(wgsl).toMatch(/_rmsl_u\d+: array<vec4<f32>, 24>,/);
+    expect(wgsl).toMatch(/_rmsl_uniforms\._rmsl_u\d+\[i32\(\S+\)\]/);
+    // Still a single binding, which is the whole point.
+    expect(wgsl.split("\n").filter(l => l.includes("var<uniform>"))).toHaveLength(1);
+  });
+
+  it("indexes a uniform array by a constant", () => {
+    let prog = Fn(() => {
+      let items = uniformArray("vec4", 4);
+      return items.element(2).add(items.element(0)).toVar();
+    });
+    // A plain number is a float node, so the index is converted rather than
+    // emitted bare.
+    expect(compileGLSL(prog())).toMatch(/_rmsl_u\d+\[int\(2\.0\)\]/);
+    expect(compileWGSL(prog())).toMatch(/_rmsl_u\d+\[i32\(2f\)\]/);
+  });
+
+  // Element types too narrow to align are stored widened and read back out of
+  // the leading components, so the padding never reaches the caller. The same
+  // approach TSL takes.
+  it("pads array elements WGSL cannot align, transparently", () => {
+    let cases: [string, string, string][] = [
+      // declared      stored in WGSL        read back with
+      ["float", "array<vec4<f32>, 4>", ".x"],
+      ["vec2", "array<vec4<f32>, 4>", ".xy"],
+      // A vec3 aligns to 16 already, so it is stored as itself.
+      ["vec3", "array<vec3<f32>, 4>", ""],
+      ["vec4", "array<vec4<f32>, 4>", ""],
+    ];
+    for (let [type, stored, read] of cases) {
+      let prog = Fn(() => (uniformArray(type as any, 4).element(1) as any).toVar());
+      let wgsl = compileWGSL(prog());
+      expect(wgsl, type).toContain(stored);
+      expect(wgsl, type).toMatch(new RegExp(`\\[i32\\([^)]*\\)\\]${read.replace(".", "\\.")}`));
+      // GLSL has no such rule, so nothing is padded there.
+      expect(compileGLSL(prog()), type).toMatch(/uniform \w+ _rmsl_u\d+\[4\];/);
+    }
+  });
+
+  it("rejects a nonsensical array length", () => {
+    expect(() => uniformArray("vec4", 0)).toThrow(/positive integer/);
+    expect(() => uniformArray("vec4", -3)).toThrow(/positive integer/);
+    expect(() => uniformArray("vec4", 2.5)).toThrow(/positive integer/);
+  });
+
+  // The stride is what a caller cannot guess. It happens to equal the element
+  // size for vec4, but the layout reports it rather than leaving the host to
+  // assume the two are the same.
+  it("reports the stride of an array member", () => {
+    let layout = wgslUniformLayout([
+      { slot: "vectors", type: "vec4<f32>", length: 2 },
+    ]);
+
+    let vectors = layout.members.find(m => m.name === "vectors")!;
+    expect(vectors.stride, "a vec4 is already 16").toBe(16);
+    expect(vectors.size).toBe(32);
+
+    expect(layout.size).toBe(32);
   });
 
   it("gives a single uniform offset zero", () => {
