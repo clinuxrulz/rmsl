@@ -1408,6 +1408,25 @@ function resolveSwizzleTarget(
 }
 
 /**
+ * Only a square matrix has an inverse, and neither language offers an overload
+ * for the rest. Asked in both backends, so the two cannot come to different
+ * answers about the same program — one emitting a call no driver accepts while
+ * the other refuses it.
+ *
+ * Returns the matrix's size, which the WGSL side needs to pick its helper.
+ */
+function assertSquareMatrix(operandType: string | undefined): number {
+  let shape = MATRIX_DIMENSIONS[operandType as string];
+  if (shape === undefined || shape[0] !== shape[1]) {
+    throw new Error(
+      `[RMSL] inverse() needs a square matrix, but this one is `
+      + `${operandType ?? "untyped"}.`,
+    );
+  }
+  return shape[0];
+}
+
+/**
  * The position is the vertex stage's output. A fragment stage cannot read it:
  * GLSL's gl_Position is write-only there and WGSL has no such value at all.
  * Emitting it anyway produced an identifier neither backend declares.
@@ -1686,7 +1705,9 @@ function compileGLSLNode(
     case "normalize": return unaryGLSL(node, ctx, "normalize");
     case "length": return unaryGLSL(node, ctx, "length");
     case "transpose": return unaryGLSL(node, ctx, "transpose");
-    case "inverse": return unaryGLSL(node, ctx, "inverse");
+    case "inverse":
+      assertSquareMatrix((node.params![0] as any)?._t);
+      return unaryGLSL(node, ctx, "inverse");
     case "fwidth": return unaryGLSL(node, ctx, "fwidth");
 
     case "matrixElement": {
@@ -2651,21 +2672,11 @@ function compileWGSLNode(
     case "length": return unaryWGSL(node, ctx, "length");
     case "transpose": return unaryWGSL(node, ctx, "transpose");
     case "inverse": {
-      // No inverse() builtin in WGSL, so the helper is pulled in on demand.
-      // Chosen by the matrix's size: testing for mat3 and falling back to mat4
-      // meant a mat2 was inverted by the four-by-four helper, and the call
-      // matched no overload. Only a square matrix has an inverse, which is why
-      // GLSL has no overload for the rest either.
+      // No inverse() builtin in WGSL, so one is written out per matrix size and
+      // pulled in on demand.
       let operand = compileWGSLStage(node.params![0], ctx);
-      let operandType = (node.params![0] as any)?._t;
-      let shape = MATRIX_DIMENSIONS[operandType];
-      if (shape === undefined || shape[0] !== shape[1]) {
-        throw new Error(
-          `[RMSL] inverse() needs a square matrix, but this one is `
-          + `${operandType ?? "untyped"}.`,
-        );
-      }
-      let helper = `_rmsl_inverse${shape[0]}`;
+      let size = assertSquareMatrix((node.params![0] as any)?._t);
+      let helper = `_rmsl_inverse${size}`;
       ctx.wgslHelpers.add(helper);
       return {
         decls: operand.decls,

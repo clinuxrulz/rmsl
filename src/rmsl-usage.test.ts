@@ -1456,6 +1456,15 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
   // helper was chosen by testing for mat3 and falling back to mat4, so a mat2
   // was inverted by the four-by-four helper and the call matched nothing.
   //
+  // Only a square matrix has an inverse, and neither language offers an
+  // overload for the rest. WGSL says so; GLSL emitted the call anyway, and a
+  // shader that no driver accepts is worse than one that fails to build here.
+  it("refuses to invert a matrix that is not square, in both backends", () => {
+    let prog = Fn(() => (uniform("mat2x3") as any).inverse().toVar());
+    expect(() => compileGLSL(prog())).toThrow(/square/i);
+    expect(() => compileWGSL(prog())).toThrow(/square/i);
+  });
+
   it("uses the inverse helper matching the matrix size", () => {
     let wgsl2 = compileWGSL(Fn(() => uniform("mat2").inverse().toVar())());
     expect(wgsl2).toContain("fn _rmsl_inverse2(");
