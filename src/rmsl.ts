@@ -2047,6 +2047,70 @@ function wgslMatrixArgs(
   return out;
 }
 
+/** Struct type and binding name holding every uniform in a WGSL shader. */
+const WGSL_UNIFORM_STRUCT = "_RmslUniforms";
+const WGSL_UNIFORM_BINDING = "_rmsl_uniforms";
+
+/** Byte size and alignment of each WGSL type, per the spec's layout rules. */
+const WGSL_LAYOUT: Record<string, { size: number; align: number }> = {
+  f32: { size: 4, align: 4 },
+  i32: { size: 4, align: 4 },
+  u32: { size: 4, align: 4 },
+  "vec2<f32>": { size: 8, align: 8 },
+  "vec3<f32>": { size: 12, align: 16 },
+  "vec4<f32>": { size: 16, align: 16 },
+  "vec2<bool>": { size: 8, align: 8 },
+  "vec3<bool>": { size: 12, align: 16 },
+  "vec4<bool>": { size: 16, align: 16 },
+  "mat2x2<f32>": { size: 16, align: 8 },
+  "mat3x3<f32>": { size: 48, align: 16 },
+  "mat4x4<f32>": { size: 64, align: 16 },
+};
+
+export interface WgslUniformMember {
+  /** Generated slot name, matching the `name` on the uniform node. */
+  name: string;
+  type: string;
+  /** Byte offset within the uniform buffer. */
+  offset: number;
+  size: number;
+}
+
+/**
+ * Place uniforms in one struct and report where each lands.
+ *
+ * WGSL caps uniform *buffers* at 12 per stage — the spec minimum, and what
+ * real devices report — so a binding per uniform stops working at the
+ * thirteenth. One struct is one binding no matter how many members, which is
+ * how WebGPU code is written by hand.
+ *
+ * Members are ordered by descending alignment so the natural WGSL layout adds
+ * no padding between them, and the offsets are returned because a caller
+ * writing the buffer has no other way to know them.
+ */
+export function wgslUniformLayout(
+  members: { slot: string; type: string }[],
+): { members: WgslUniformMember[]; size: number } {
+  const ordered = [...members].sort((a, b) => {
+    const byAlign = (WGSL_LAYOUT[b.type]?.align ?? 4) - (WGSL_LAYOUT[a.type]?.align ?? 4);
+    return byAlign !== 0 ? byAlign : a.slot.localeCompare(b.slot);
+  });
+
+  const out: WgslUniformMember[] = [];
+  let offset = 0;
+  for (const m of ordered) {
+    const { size, align } = WGSL_LAYOUT[m.type] ?? { size: 4, align: 4 };
+    offset = Math.ceil(offset / align) * align;
+    out.push({ name: m.slot, type: m.type, offset, size });
+    offset += size;
+  }
+  // A uniform struct is itself aligned to its largest member.
+  const structAlign = ordered.reduce(
+    (a, m) => Math.max(a, WGSL_LAYOUT[m.type]?.align ?? 4), 4,
+  );
+  return { members: out, size: Math.ceil(offset / structAlign) * structAlign };
+}
+
 function wgslType(brand: any): string {
   return typeToWGSL[brand as string] ?? "f32";
 }
@@ -2165,10 +2229,15 @@ function compileWGSLNode(
         });
       }
       if (!v?.slot) return { decls: [], body: [], expr: "uniform<f32>" };
+      // Value uniforms are members of one struct rather than a binding each, so
+      // their references are qualified. Textures keep a binding of their own —
+      // they cannot live in the uniform address space — and stay unqualified.
+      let isTexture = v.shaderType === "sampler2D" || v.shaderType === "samplerCube";
+      let ref = isTexture ? v.slot : `${WGSL_UNIFORM_BINDING}.${v.slot}`;
       return {
         decls: [],
         body: [],
-        expr: isBoolean ? `(${v.slot} != ${zero})` : v.slot,
+        expr: isBoolean ? `(${ref} != ${zero})` : ref,
       };
     }
 
@@ -2818,16 +2887,26 @@ function compileWGSLWithStage(
   let hasVec4Result = lastType === "vec4" && !ctx.positionWritten;
 
   let lines: string[] = [];
-  let ubBinding = 0;
   let texBinding = 0;
   let samplerBinding = 0;
   let sortedUniforms = [...ctx.uniforms.entries()].sort((a, b) => a[1].slot.localeCompare(b[1].slot));
-  for (let [, info] of sortedUniforms) {
-    if (info.type === "texture_2d<f32>" || info.type === "texture_cube<f32>") {
-      lines.push(`@group(1) @binding(${texBinding++}) var ${info.slot}: ${info.type};`);
-    } else {
-      lines.push(`@group(0) @binding(${ubBinding++}) var<uniform> ${info.slot}: ${info.type};`);
-    }
+
+  // Textures keep their own bindings; everything else goes in one struct,
+  // because WGSL allows only 12 uniform buffers per stage.
+  let textures = sortedUniforms.filter(([, i]) =>
+    i.type === "texture_2d<f32>" || i.type === "texture_cube<f32>");
+  let plain = sortedUniforms.filter(([, i]) =>
+    i.type !== "texture_2d<f32>" && i.type !== "texture_cube<f32>");
+
+  for (let [, info] of textures) {
+    lines.push(`@group(1) @binding(${texBinding++}) var ${info.slot}: ${info.type};`);
+  }
+  if (plain.length > 0) {
+    let layout = wgslUniformLayout(plain.map(([, i]) => ({ slot: i.slot, type: i.type })));
+    lines.push(`struct ${WGSL_UNIFORM_STRUCT} {`);
+    for (let m of layout.members) lines.push(`  ${m.name}: ${m.type},`);
+    lines.push("};");
+    lines.push(`@group(0) @binding(0) var<uniform> ${WGSL_UNIFORM_BINDING}: ${WGSL_UNIFORM_STRUCT};`);
   }
   ctx.wgslSamplers.forEach((info) => {
     lines.push(`@group(2) @binding(${samplerBinding++}) var ${info.samplerSlot}: sampler;`);
@@ -3045,10 +3124,18 @@ function compileFnBody(
       code += `  return ${returnType}();\n`;
     }
     code += `}\n`;
-    let ubBinding = 0;
+    // Same single-struct packing as a full shader, for the same reason: one
+    // binding per uniform runs out at twelve.
     let sortedUniforms = [...ctx.uniforms.entries()].sort((a, b) => a[1].slot.localeCompare(b[1].slot));
-    for (let [, info] of sortedUniforms) {
-      code += `@group(0) @binding(${ubBinding++}) var<uniform> ${info.slot}: ${info.type};\n`;
+    if (sortedUniforms.length > 0) {
+      let layout = wgslUniformLayout(
+        sortedUniforms.map(([, i]) => ({ slot: i.slot, type: i.type })),
+      );
+      let struct = `struct ${WGSL_UNIFORM_STRUCT} {\n`
+        + layout.members.map(m => `  ${m.name}: ${m.type},\n`).join("")
+        + `};\n`
+        + `@group(0) @binding(0) var<uniform> ${WGSL_UNIFORM_BINDING}: ${WGSL_UNIFORM_STRUCT};\n\n`;
+      code = struct + code;
     }
     return code;
   }

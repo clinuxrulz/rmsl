@@ -5,7 +5,7 @@ import {
   If, For, While, discard, break_, continue_,
   uniform, attribute, varying, output, builtinPosition, builtinFragDepth,
   isUniformNode, isAttributeNode, isVaryingNode,
-  compileGLSLFn, compileWGSLFn, uniformRaw,
+  compileGLSLFn, compileWGSLFn, uniformRaw, wgslUniformLayout,
 } from "./rmsl";
 // Recording stand-ins for the real compilers: each returns the language it is
 // named for and additionally compiles the program to the other, so every shader
@@ -1134,12 +1134,14 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
   // from another matrix is a copy/truncate, and expanding it produced
   // `mat3x3<f32>(m, 0f, 0f, 0f, m, ...)` — a constructor that does not exist.
   it("keeps a matrix-from-matrix constructor as a single argument", () => {
+    // WGSL uniforms are members of one struct, so a reference is qualified —
+    // the assertion is that there is one argument, whatever it is spelled.
     let prog3 = Fn(() => mat3(uniform("mat3")).toVar());
-    expect(compileWGSL(prog3())).toMatch(/mat3x3<f32>\(_rmsl_u\d+\)/);
+    expect(compileWGSL(prog3())).toMatch(/mat3x3<f32>\(_rmsl_uniforms\._rmsl_u\d+\)/);
     expect(compileGLSL(prog3())).toMatch(/mat3\(_rmsl_u\d+\)/);
 
     let prog4 = Fn(() => mat4(uniform("mat4")).toVar());
-    expect(compileWGSL(prog4())).toMatch(/mat4x4<f32>\(_rmsl_u\d+\)/);
+    expect(compileWGSL(prog4())).toMatch(/mat4x4<f32>\(_rmsl_uniforms\._rmsl_u\d+\)/);
   });
 
   it("compiles every swizzle accessor", () => {
@@ -1450,5 +1452,85 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(compileGLSL(Fn(() => int(7).mult(int(2)).toVar())())).toContain("= 14;");
     // The float path keeps the fraction the integer path drops.
     expect(compileGLSL(Fn(() => float(7).div(float(2)).toVar())())).toContain("3.5");
+  });
+
+  // === WGSL uniform packing ===
+  //
+  // WGSL allows 12 uniform *buffers* per stage — the spec minimum and what real
+  // devices report — so a binding per uniform stops working at the thirteenth.
+  // They are packed into one struct instead, which is one binding regardless of
+  // count.
+
+  it("packs every value uniform into a single binding", () => {
+    let prog = Fn(() => {
+      // Twenty is comfortably past the twelve-buffer limit.
+      let sum = float(0).toVar();
+      for (let i = 0; i < 20; i++) sum.assign(sum.add(uniform("float")));
+      return sum;
+    });
+    let wgsl = compileWGSL(prog());
+
+    let bindings = wgsl.split("\n").filter(l => l.includes("var<uniform>"));
+    expect(bindings, "one binding no matter how many uniforms").toHaveLength(1);
+    expect(wgsl).toContain("struct _RmslUniforms {");
+    // Every reference goes through the struct.
+    expect(wgsl).toContain("_rmsl_uniforms._rmsl_u");
+  });
+
+  it("keeps textures out of the uniform struct", () => {
+    let prog = Fn(() => {
+      let tex = uniform("sampler2D");
+      let scale = uniform("float");
+      let out = output("vec4");
+      out.assign(tex.texture(vec2(0.5, 0.5)).mult(scale));
+      return out;
+    });
+    let wgsl = compileWGSL(prog());
+
+    // A texture is an opaque handle: it cannot be a uniform variable nor a
+    // member of a uniform struct, so it keeps a binding of its own.
+    expect(wgsl).toMatch(/@group\(1\) @binding\(0\) var \S+: texture_2d<f32>;/);
+    expect(wgsl).toContain("@group(0) @binding(0) var<uniform> _rmsl_uniforms");
+    // The scalar is in the struct; the texture is referenced bare.
+    expect(wgsl).toContain("_rmsl_uniforms._rmsl_u");
+    expect(wgsl).not.toMatch(/_rmsl_uniforms\.\S*: texture/);
+  });
+
+  it("leaves GLSL uniforms as individual declarations", () => {
+    let prog = Fn(() => uniform("float").add(uniform("vec2").x).toVar());
+    let glsl = compileGLSL(prog());
+    // GLSL has no such limit, so nothing is packed.
+    expect(glsl).toContain("uniform float");
+    expect(glsl).toContain("uniform vec2");
+    expect(glsl).not.toContain("_rmsl_uniforms");
+  });
+
+  // The host has to write the buffer, and declaration order is not layout
+  // order: members are sorted by descending alignment so WGSL inserts no
+  // padding between them. Offsets are returned because there is no other way
+  // for a caller to know them.
+  it("reports uniform offsets following WGSL alignment rules", () => {
+    let layout = wgslUniformLayout([
+      { slot: "a", type: "f32" },
+      { slot: "b", type: "vec2<f32>" },
+      { slot: "c", type: "vec3<f32>" },
+      { slot: "d", type: "vec4<f32>" },
+    ]);
+
+    expect(layout.members.map(m => m.name), "ordered by descending alignment")
+      .toEqual(["c", "d", "b", "a"]);
+    expect(layout.members.map(m => m.offset)).toEqual([0, 16, 32, 40]);
+    // vec3 occupies 12 bytes but aligns to 16, so d starts at 16 not 12.
+    expect(layout.members.find(m => m.name === "c")!.size).toBe(12);
+    // Struct is rounded up to its largest member's alignment.
+    expect(layout.size).toBe(48);
+  });
+
+  it("gives a single uniform offset zero", () => {
+    let layout = wgslUniformLayout([{ slot: "only", type: "vec4<f32>" }]);
+    expect(layout.members).toEqual([
+      { name: "only", type: "vec4<f32>", offset: 0, size: 16 },
+    ]);
+    expect(layout.size).toBe(16);
   });
 });
