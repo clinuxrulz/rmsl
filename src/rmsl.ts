@@ -1002,9 +1002,11 @@ export function uniformArray<T extends ShaderType>(
   }
   if (shaderType === "sampler2D" || shaderType === "samplerCube") {
     throw new Error(
-      `[RMSL] uniformArray cannot hold a texture. WGSL has no array of them in`
-      + ` the uniform address space, so there is no spelling both backends`
-      + ` share. Declare each texture on its own.`,
+      `[RMSL] uniformArray cannot hold a texture. WGSL has no array of separate`
+      + ` texture bindings without an extension, so there is no spelling both`
+      + ` backends share — Three.js does not offer one either. Declare each`
+      + ` texture on its own, or use a layered array texture, which both`
+      + ` languages do have.`,
     );
   }
   let id = nextUniformId++;
