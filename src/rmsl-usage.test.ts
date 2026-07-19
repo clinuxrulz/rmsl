@@ -501,6 +501,29 @@ describe("RMSL", () => {
     expect(glsl.match(/_rmsl_o\d+ = /g) ?? []).toHaveLength(1);
   });
 
+  // Everything a vertex stage passes onward shares one set of numbered slots.
+  // Varyings and declared outputs were numbered by two counters that knew
+  // nothing of each other, so a shader using both handed out the same slot
+  // twice and the module would not build.
+  it("numbers everything a vertex stage passes on without collision", () => {
+    let build = () => Fn(() => {
+      let v = varying("vec2");
+      v.assign(vec2(1, 2));
+      let o = output("vec4");
+      o.assign(vec4(1, 0, 0, 1));
+      return vec4(0, 0, 0, 1);
+    });
+
+    let wgsl = compileWGSL.vertex(build()());
+    let slots = [...wgsl.matchAll(/@location\((\d+)\)/g)].map(m => m[1]);
+    expect(slots.length, "two values are passed on").toBe(2);
+    expect(new Set(slots).size, "each slot used once").toBe(slots.length);
+
+    // A location qualifier belongs on a fragment output. GLSL ES 3.00 does not
+    // allow one on a vertex output, whatever the number.
+    expect(compileGLSL.vertex(build()())).not.toMatch(/layout\(location=\d+\) out/);
+  });
+
   it("output() creates output in WGSL fragment", () => {
     let prog = Fn(() => {
       let outColor = output("vec4");

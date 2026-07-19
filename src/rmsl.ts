@@ -2016,7 +2016,12 @@ function compileGLSLWithStage(
   let outputLocation = 0;
   ctx.outputs.forEach((info) => {
     if (info && info.slot && info.type) {
-      lines.push(`layout(location=${outputLocation++}) out ${info.type} ${info.slot};`);
+      // The qualifier names a draw buffer, which only a fragment stage has.
+      // GLSL ES 3.00 rejects one on a vertex output, where the value is simply
+      // another thing passed on to the fragment stage.
+      lines.push(shaderStage === "fragment"
+        ? `layout(location=${outputLocation++}) out ${info.type} ${info.slot};`
+        : `out ${info.type} ${info.slot};`);
     }
   });
   if (emitImplicitColor) {
@@ -3112,16 +3117,17 @@ function compileWGSLWithStage(
     }
     lines.push("struct VertexOutput {");
     lines.push("  @builtin(position) position: vec4<f32>,");
-    let varyingLoc = 0;
+    // Everything the stage passes on shares one set of slots, because they all
+    // become members of this one structure. Numbering varyings and declared
+    // outputs separately handed the same slot to one of each.
+    let outgoingLocation = 0;
     let sortedVaryings = [...ctx.varyings.entries()].sort((a, b) => a[1].slot.localeCompare(b[1].slot));
     for (let [, info] of sortedVaryings) {
-      lines.push(`  @location(${varyingLoc++}) ${info.slot}: ${info.type},`);
+      lines.push(`  @location(${outgoingLocation++}) ${info.slot}: ${info.type},`);
     }
-    // Numbered per shader, as in the GLSL branch.
-    let vertexOutputLocation = 0;
     ctx.outputs.forEach((info) => {
       if (info && info.slot && info.type) {
-        lines.push(`  @location(${vertexOutputLocation++}) ${info.slot}: ${info.type},`);
+        lines.push(`  @location(${outgoingLocation++}) ${info.slot}: ${info.type},`);
       }
     });
     lines.push("};");
