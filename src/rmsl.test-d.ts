@@ -1,11 +1,8 @@
 /**
  * Type-level tests.
  *
- * Several defects in this compiler were mismatches between what a signature
- * promised and what the node actually was — a comparison declared as returning
- * a single boolean while building a boolean vector, a reducing operation
- * declared as float while carrying its operand's type. Those are invisible to
- * a runtime assertion, so they are pinned here instead.
+ * These catch mismatches between a signature's return type and the node's
+ * actual type, which are invisible to a runtime assertion.
  *
  * Run by `pnpm test:types`, and also checked by `pnpm type-check`.
  */
@@ -53,8 +50,7 @@ describe("boolean vector reduction", () => {
 });
 
 describe("operations whose result is not their operand's type", () => {
-  // These reduce a vector to a scalar. Getting this wrong sent float
-  // comparisons down the vector path and emitted lessThan(float, float).
+  // These reduce a vector to a scalar.
   it("types length, dot and distance as float", () => {
     expectTypeOf(vec3(1, 2, 3).length()).toEqualTypeOf<Node<"float">>();
     expectTypeOf(vec3(1, 2, 3).dot(vec3(4, 5, 6))).toEqualTypeOf<Node<"float">>();

@@ -10,8 +10,7 @@ import {
 // Recording stand-ins for the real compilers: each returns the language it is
 // named for and additionally compiles the program to the other, so every shader
 // the tests generate is checked by a real GLSL and WGSL implementation in the
-// afterAll below. Aliasing at the import means the tests need no changes; see
-// src/testing/shader-validity.ts for why substring assertions were not enough.
+// afterAll below. Aliasing at the import means the tests need no changes.
 import {
   recordingGLSL as compileGLSL,
   recordingWGSL as compileWGSL,
@@ -226,8 +225,7 @@ describe("RMSL", () => {
     expect(compileWGSL(prog())).toContain("(!(");
   });
 
-  // refract(I, N, eta) takes three arguments; routing it through the binary
-  // emitter silently dropped eta and produced a two-argument call.
+  // refract(I, N, eta) takes three arguments.
   it("compiles refract with all three arguments to GLSL", () => {
     let prog = Fn(() => vec3(1,0,0).refract(vec3(0,1,0), 0.5).toVar());
     let glsl = compileGLSL(prog());
@@ -241,9 +239,7 @@ describe("RMSL", () => {
   });
 
   // The update clause arrives as statements, so its work sits in `body` while
-  // `expr` holds only a bare variable reference. Emitting `expr` alone dropped
-  // the increment and produced `for (float i = 0.0; (i < 4.0); i)` — an
-  // infinite loop that hangs the GPU.
+  // `expr` holds only a bare variable reference.
   it("emits the for-loop update clause in GLSL", () => {
     let prog = Fn(() => {
       let total = float(0).toVar();
@@ -276,9 +272,8 @@ describe("RMSL", () => {
     expect(header).toMatch(/;\s*(\S+) = \(\1 \+ 1f\)\) \{$/);
   });
 
-  // dot/length/distance reduce a vector to a scalar. Typing the node after its
-  // first operand left `_t` as "vec2", which sent float comparisons down the
-  // vector path and emitted `lessThan(float, float)` — no such GLSL overload.
+  // dot/length/distance reduce a vector to a scalar, so their result type is
+  // float, not the operand type.
   it("types length/distance/dot as float, not the operand type", () => {
     let prog = Fn(() => {
       let a = vec2(3, 4).toVar();
@@ -347,10 +342,8 @@ describe("RMSL", () => {
     expect(glsl).toContain("(1 < 2)");
   });
 
-  // A plain JS number has no shader type of its own. Typing it as float beside
-  // an integer operand made the operands disagree, so codegen inserted a
-  // conversion and produced `int x = (float(u) % 2.0)` — a float expression
-  // assigned to an int. A uniform is used because constants fold away.
+  // A plain JS number has no shader type of its own. A uniform is used because
+  // constants fold away.
   it("gives a plain number the operand's integer type", () => {
     let prog = Fn(() => uniform("int").mod(2).toVar());
     let glsl = compileGLSL(prog());
@@ -463,9 +456,7 @@ describe("RMSL", () => {
   });
 
   // GLSL ES 3.00 removed gl_FragColor, so a fragment shader with nowhere to
-  // write its colour renders nothing. WGSL already declared an implicit output
-  // for this case; GLSL computed the value and dropped it, so one program was
-  // red on WebGPU and blank on WebGL2.
+  // write its colour needs an explicit output declaration.
   it("declares an implicit colour output when a fragment shader has none", () => {
     let build = () => Fn(() => vec4(1, 0, 0, 1).toVar());
 
@@ -477,9 +468,7 @@ describe("RMSL", () => {
     expect(wgsl).toContain("_rmsl_fragColor");
   });
 
-  // The stage result went into every declared output, whatever its type and
-  // whatever the program had already written there. WGSL leaves declared
-  // outputs to the program's own assignments; GLSL now does too.
+  // Declared outputs are assigned by the program.
   it("leaves an explicitly written output alone", () => {
     let prog = Fn(() => {
       let outColor = output("vec4");
@@ -502,9 +491,6 @@ describe("RMSL", () => {
   });
 
   // Everything a vertex stage passes onward shares one set of numbered slots.
-  // Varyings and declared outputs were numbered by two counters that knew
-  // nothing of each other, so a shader using both handed out the same slot
-  // twice and the module would not build.
   it("numbers everything a vertex stage passes on without collision", () => {
     let build = () => Fn(() => {
       let v = varying("vec2");
@@ -603,11 +589,7 @@ describe("RMSL", () => {
     expect(() => compileWGSL.vertex(prog())).toThrow(/vertex shader/);
   });
 
-  // "No result" was recognised by comparing the emitted text against "0.0",
-  // which is also what the number zero compiles to in GLSL. So a vertex shader
-  // returning zero slipped past the check and produced a shader that writes no
-  // position — the draw-nothing failure the check exists to prevent — while the
-  // same program was refused by WGSL, which spells zero differently.
+  // A vertex shader must produce a position, and zero is not a valid position.
   it("rejects a vertex result of zero, like any other non-position", () => {
     // @ts-expect-error a float cannot become a position, zero included
     expect(() => compileGLSL.vertex(Fn(() => float(0))()))
@@ -623,10 +605,7 @@ describe("RMSL", () => {
       .toThrow(/vertex shader/);
   });
 
-  // Writing the position explicitly is the documented way to set it. The check
-  // on the stage result did not know that had happened, so it demanded a vec4
-  // result as well — and following its advice would have written the position
-  // twice, with the returned value overwriting the deliberate one.
+  // Writing the position explicitly is the documented way to set it.
   it("allows a vertex shader that writes the position itself", () => {
     let build = () => Fn(() => {
       builtinPosition().assign(vec4(1, 2, 3, 4));
@@ -646,10 +625,8 @@ describe("RMSL", () => {
       .toThrow(/vertex shader/);
   });
 
-  // Returning nothing was treated as "there is no result to check", but a
-  // vertex shader still has to produce a position somehow. One that returns
-  // nothing and never writes one compiles to a main that sets no position at
-  // all — the same shader-that-draws-nothing the check exists to catch.
+  // A vertex shader that returns nothing and never writes a position fails
+  // validation.
   it("rejects a vertex shader that produces no position at all", () => {
     let prog = Fn(() => { float(1).toVar(); });
     expect(() => compileGLSL.vertex(prog())).toThrow(/vertex shader/);
@@ -1007,11 +984,8 @@ describe("RMSL", () => {
 
   // === Standalone function compilers ===
   //
-  // compileGLSLFn/compileWGSLFn and uniformRaw were the only exported API with
-  // no test at all — the mutation run put 75 uncovered mutants in their shared
-  // body. They emit a function rather than a whole shader, so each result is
-  // embedded in a minimal shader and validated: the thing worth knowing is that
-  // what they produce compiles where it is meant to be used.
+  // compileGLSLFn/compileWGSLFn and uniformRaw emit a function rather than a
+  // whole shader, so each result is embedded in a minimal shader and validated.
 
   it("compileGLSLFn emits a named function with typed params", () => {
     let glsl = compileGLSLFn((a: any, b: any) => a.add(b).sin(), {
@@ -1070,9 +1044,6 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
   });
 
   // WGSL has no inverse() builtin, so the compiler writes one out on demand.
-  // The whole-shader path emits the helpers it collected; this path collected
-  // them into the same set and then dropped them, leaving a call to a function
-  // that was never defined.
   it("compileWGSLFn emits the helpers the function body calls", () => {
     let wgsl = compileWGSLFn((m: any) => m.inverse(), {
       name: "invert",
@@ -1098,12 +1069,11 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
 
   // === Breadth coverage ===
   //
-  // The mutation run showed these reached by no test at all. They are exported
-  // API, and going through the recording compilers means both backends are
-  // checked by a real implementation as well as by the assertion.
+  // These are exported API, and going through the recording compilers means
+  // both backends are checked by a real implementation as well as by the
+  // assertion.
 
-  // Driven by a uniform because constant folding collapses these on literals,
-  // which is how they avoided being exercised in the first place.
+  // Driven by a uniform because constant folding collapses these on literals.
   it("compiles every unary math builtin", () => {
     let ops = [
       "sin", "cos", "tan", "asin", "acos", "atan", "abs", "sign",
@@ -1135,8 +1105,7 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
 
   // GLSL reads a lone scalar as a diagonal, so WGSL — which has no such
   // overload — has to write every component out. The expansion has to know the
-  // shape: a matCxR is C columns of R rows, and only the square types were
-  // listed, so the non-square ones passed straight through as `mat2x3<f32>(2f)`.
+  // shape: a matCxR is C columns of R rows.
   it("expands a scalar matrix constructor to a full diagonal in WGSL", () => {
     let cases: [string, any, string][] = [
       ["mat2", mat2, "mat2x2<f32>(2f, 0f, 0f, 2f)"],
@@ -1154,8 +1123,7 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
   });
 
   // A lone argument is only a diagonal when it is a scalar. Building a matrix
-  // from another matrix is a copy/truncate, and expanding it produced
-  // `mat3x3<f32>(m, 0f, 0f, 0f, m, ...)` — a constructor that does not exist.
+  // from another matrix is a copy/truncate.
   it("keeps a matrix-from-matrix constructor as a single argument", () => {
     // WGSL uniforms are members of one struct, so a reference is qualified —
     // the assertion is that there is one argument, whatever it is spelled.
@@ -1179,11 +1147,10 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
   });
 
   // Raw JS arrays are accepted wherever a node is, and their length picks the
-  // type. Only the vec3 length had ever been exercised.
+  // type.
   it("wraps raw arrays by length", () => {
     // Widths have to match the receiver — neither language multiplies a vec4 by
-    // a vec3, and writing it that way is how the first draft of this test got
-    // caught by the shader validation rather than by its own assertions.
+    // a vec3.
     let cases: [() => any, string, string][] = [
       [() => vec2(1, 1).mult([1, 2]), "vec2", "vec2<f32>"],
       [() => vec3(1, 1, 1).mult([1, 2, 3]), "vec3", "vec3<f32>"],
@@ -1287,11 +1254,7 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
   });
 
   // A loop's update clause can do more than one thing. GLSL joins them with
-  // the comma operator; WGSL's grammar allows a single statement there, and the
-  // rest were being dropped. The two backends then computed different answers
-  // from one program, and if the counter happened to be written first it was
-  // the counter that vanished — leaving a loop that never ends and a GPU that
-  // stops responding.
+  // the comma operator; WGSL's grammar allows a single statement there.
   function twoStepLoop(counterFirst: boolean) {
     return Fn(() => {
       let other = float(0).toVar();
@@ -1343,9 +1306,7 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
   });
 
   // A plain JavaScript number has no shader type of its own, so it takes the
-  // type of the operand it sits beside. Arithmetic learned that; comparisons
-  // did not, so an unsigned operand was compared against a signed literal and
-  // WGSL had no such overload.
+  // type of the operand it sits beside.
   it("gives a compared literal the operand's integer type", () => {
     let unsigned = Fn(() => uniform("uint").lessThan(2).toVar());
     expect(compileWGSL(unsigned())).toMatch(/\(\S+ < 2u\)/);
@@ -1356,9 +1317,7 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(compileGLSL(signed())).not.toContain("float(");
   });
 
-  // A literal that is not a whole number cannot take an integer type, and the
-  // backends disagreed about what to do instead: GLSL widened the operand and
-  // then failed to narrow the result, WGSL truncated the literal silently.
+  // A literal that is not a whole number cannot take an integer type.
   it("refuses a fractional literal beside an integer operand", () => {
     expect(() => Fn(() => uniform("int").add(2.5).toVar())())
       .toThrow(/whole number|integer/i);
@@ -1372,9 +1331,7 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
   });
 
   // WGSL makes a single component assignable but not a multi-component
-  // swizzle, so the write is split per component. Splitting only looked at the
-  // immediate base, so a swizzle of a swizzle re-emitted the very form the
-  // split exists to avoid — a.xyz is a value, and its .x cannot be assigned.
+  // swizzle, so the write is split per component.
   it("resolves a nested swizzle down to the variable it writes to", () => {
     let prog = Fn(() => {
       let a = vec4(1, 2, 3, 4).toVar();
@@ -1403,9 +1360,7 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
   });
 
   // WGSL's uniform address space takes host-shareable types only, and neither
-  // a bool nor a boolean vector is one. A bool was already carried as a u32
-  // and compared back on read; adding the boolean vector types to the type set
-  // widened what a uniform accepts without widening that.
+  // a bool nor a boolean vector is one.
   it("carries a boolean vector uniform through a host-shareable type", () => {
     let prog = Fn(() => uniform("bvec3").all().toVar());
     let wgsl = compileWGSL(prog());

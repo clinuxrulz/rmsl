@@ -73,11 +73,8 @@ export const KNOWN_INVALID: Record<string, string> = {
 /**
  * Compile a program to *both* backends, whichever one the test asked for.
  *
- * Coverage had drifted badly: of 69 tests, 48 only ever compiled to GLSL and
- * 20 only to WGSL, so a backend-specific defect stayed invisible unless
- * someone had thought to write the counterpart by hand. Compiling both here
- * makes parity structural — a new test gets it for free — while the test's own
- * assertions still run against the language it chose.
+ * Compiling both here makes parity structural — a new test gets it for free —
+ * while the test's own assertions still run against the language it chose.
  */
 function recordBoth(root: any, stage: ShaderStage, want: ShaderLang): string {
   const test = expect.getState().currentTestName ?? "<unknown test>";
@@ -174,9 +171,7 @@ async function validateWGSL(items: Recorded[]): Promise<(string | null)[]> {
   // pushErrorScope, createShaderModule and popErrorScope are all synchronous
   // stack operations — only the *result* of a pop is asynchronous. So every
   // module is created and its scope popped up front, and the results are
-  // awaited together. Awaiting each pop inside the loop instead cost one round
-  // trip to the device per shader, which was around 100ms each and made this
-  // function the bulk of the suite's running time.
+  // awaited together.
   const pending = items.map(item => {
     device.pushErrorScope("validation");
     device.createShaderModule({ code: item.src! });

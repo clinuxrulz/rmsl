@@ -5,8 +5,8 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts"],
     typecheck: {
-      // Several defects here were a signature promising one thing while the
-      // node was another, which no runtime assertion can see.
+      // Type-level tests catch mismatches between signature return types and
+      // actual node types.
       include: ["src/**/*.test-d.ts"],
     },
   },

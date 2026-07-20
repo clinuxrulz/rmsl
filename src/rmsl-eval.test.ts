@@ -3,20 +3,11 @@
  *
  * Every other test asserts on emitted text, and text cannot tell `a + b` from
  * `a - b` — both are valid, and both contain whatever the assertion looks for.
- * Mutation testing named the gap: most surviving mutants change the arithmetic
- * without making the shader invalid.
- *
- * Concretely, replacing `min` with `max` in the GLSL emitter leaves all 130
- * text-based tests passing and the shader valid. It is caught here.
- *
- * Each expression is run on both backends, so the two are also checked against
- * each other. One RMSL program has one meaning, and a disagreement identifies
- * which backend is wrong without anyone having to write down the expected
- * output text.
+ * These evaluate the shader on both backends and compare the computed result,
+ * so a disagreement identifies which backend is wrong.
  *
  * Operands come in as function parameters rather than literals, since constant
- * folding would otherwise compute the answer before codegen ever runs — which
- * is exactly how the min/max case escaped notice.
+ * folding would otherwise compute the answer before codegen ever runs.
  */
 
 import { describe, it, expect, afterAll } from "vitest";
@@ -58,7 +49,7 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
     await expectValue((a) => a.negate(), [3], -3);
   }, 60_000);
 
-  // The pair that motivated this file: swapping them is invisible to text.
+  // min and max must agree across both backends.
   it("computes min and max the right way round", async () => {
     await expectValue((a, b) => a.min(b), [3, 9], 3);
     await expectValue((a, b) => a.max(b), [3, 9], 9);
@@ -91,9 +82,7 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
   }, 60_000);
 
   // Floored, following GLSL's mod() — the function this operation is named
-  // for — so the result takes the sign of the divisor. WGSL's % truncates
-  // instead, which agrees only while both operands are positive, and that is
-  // the one case a single test would have covered.
+  // for — so the result takes the sign of the divisor.
   it("computes float modulus the same way on both backends", async () => {
     await expectValue((a, b) => a.mod(b), [7.5, 2], 1.5);
     await expectValue((a, b) => a.mod(b), [-7.5, 2], 0.5);
@@ -102,8 +91,7 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
   }, 60_000);
 
   // Folding happens in JavaScript, whose % also truncates, so the literal path
-  // has to be corrected the same way or an expression changes meaning
-  // depending on whether its operands happen to be constants.
+  // is corrected the same way.
   it("folds a modulus to what the shader would have computed", async () => {
     await expectValue(() => float(-7.5).mod(float(2)), [], 0.5);
     await expectValue((a, b) => a.mod(b), [-7.5, 2], 0.5);
@@ -118,10 +106,9 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
 
   // === Control flow ===
   //
-  // These were previously checked by matching the emitted loop header against a
-  // regex, which only works if you already know what the bug looks like. A sum
-  // pins the whole loop at once: it comes out right only if the loop starts,
-  // increments and stops correctly.
+  // Control flow is checked by running the shader and verifying the computed
+  // result. A sum pins the whole loop at once: it comes out right only if the
+  // loop starts, increments and stops correctly.
   //
   // `toVar()` and `If` need a block scope, which the standalone function
   // compilers do not open, so each body is wrapped in `Fn(() => ...)()`.
@@ -148,9 +135,7 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
   }, 60_000);
 
   // A loop whose update does two things: advance the counter, and tally
-  // alongside it. Both run four times, so the tally ends at 4. WGSL's loop
-  // header holds one statement, and the others were being dropped — which left
-  // the tally at 0 here, and hung the GPU when the counter was the one lost.
+  // alongside it. Both run four times, so the tally ends at 4.
   it("runs every statement of a loop update", async () => {
     const tallyLoop = () => Fn(() => {
       const tally = float(0).toVar();
@@ -208,8 +193,7 @@ describe.skipIf(EVALUATION_SKIPPED)("RMSL evaluation", () => {
   }, 60_000);
 
   // break_ and continue_ change which iterations contribute, so the sum says
-  // whether they landed. continue_ inside a for loop emitted a malformed WGSL
-  // header until recently, and nothing checked what it computed.
+  // whether they landed.
   it("honours break_ and continue_", async () => {
     const sumUntilBreak = (limit: Node<"float">) => Fn(() => {
       const total = float(0).toVar();

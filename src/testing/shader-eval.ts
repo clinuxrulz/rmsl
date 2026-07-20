@@ -1,13 +1,7 @@
 /**
  * Runs a compiled expression and reports the number it produces.
  *
- * The rest of the suite checks that generated shaders *compile*. Nothing
- * checked that they *compute the right answer*, and those are different
- * questions: emitting `a - b` where `a + b` was meant compiles perfectly and
- * passes every text assertion. Mutation testing put a name to the gap — most
- * surviving mutants change what a shader calculates without making it invalid.
- *
- * So an expression is compiled to a function, called on both backends, and the
+ * An expression is compiled to a function, called on both backends, and the
  * result compared against the same arithmetic in JS. Running both also makes
  * the backends checkable against each other: one RMSL program must produce one
  * number, and a divergence is a bug in whichever side disagrees with JS.
@@ -145,11 +139,7 @@ export async function runWGSL(code: string): Promise<number> {
 
   // A shader that fails to compile is reported as an uncaptured device error
   // rather than an exception: the pipeline, the dispatch and the copy that
-  // follow are all quietly invalid, and the readback buffer is handed back
-  // still holding its zero initialiser. Reading that as a result means a
-  // completely broken backend returns 0, which is a value the evaluation tests
-  // legitimately expect in several places — so the failure has to be caught
-  // here or it reads as a pass.
+  // follow are all quietly invalid.
   gpu.pushErrorScope("validation");
   const module = gpu.createShaderModule({ code });
   const pipeline = gpu.createComputePipeline({

@@ -98,12 +98,9 @@ type Vec2Swizzles = {
 /**
  * Which operations each shader type carries.
  *
- * A registry rather than a chain of conditionals. The conditional form made
- * the checker evaluate every branch at each instantiation of `Node`, and a
- * member referring back to `Node` then expanded without bound — which is why
- * a self-referential op like `not(): Node<A>` exhausted its heap. Defunction-
- * alising the dispatch into a lookup replaces that with a single indexed
- * access, and the interface's members stay lazy.
+ * A registry rather than a chain of conditionals. Defunctionalising the
+ * dispatch into a lookup provides a single indexed access, and the interface's
+ * members stay lazy.
  *
  * Every ShaderType needs an entry, so a new type cannot be added without
  * saying what it supports.
@@ -205,9 +202,7 @@ interface VecCommonOps<A extends "vec2" | "vec3" | "vec4"> {
   clamp(min: Node<A> | FloatLike, max: Node<A> | FloatLike): Node<A>;
   mix(b: Node<A>, t: FloatLike): Node<A>;
   // step/smoothstep live on FloatMathOps, which also applies to every vector
-  // type. Declaring them here as well gave the vector types two declarations,
-  // and this one's `Node<"float">` return was wrong: GLSL's step returns
-  // genType, so `vec3.step(...)` is a vec3.
+  // type.
 }
 
 interface Vec3Ops {
@@ -343,9 +338,8 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   add(other: any): any { return op("add", this, other); }
   sub(other: any): any { return op("sub", this, other); }
   mult(other: any): any {
-    // A matCxR times a vecC gives a vecR. Left to op() the result would take
-    // the matrix's type, and the widths were previously checked only for the
-    // two square types, which let a mat3 times a vec4 through as well.
+    // A matCxR times a vecC gives a vecR. The result type is determined by the
+    // vector dimension, not the matrix type.
     let shape = MATRIX_DIMENSIONS[this._t];
     let otherType = other?._t;
     if (
@@ -417,9 +411,7 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   multVec4(other: any): any {
     return node({ _t: "vec4", type: "matVecMul", params: [this as BaseNode<ShaderType>, wrapValue(other) as BaseNode<ShaderType>] });
   }
-  // The argument is an index, so a plain number is an integer whatever the
-  // matrix is made of. Left to op() it would be typed from the first operand,
-  // which is the matrix, and emitted as a float — m[int(0.0)].
+  // The argument is an index, so a plain number is always typed as an integer.
   element(i: any): any {
     return op(
       "matrixElement",
@@ -671,9 +663,7 @@ const UNIFORM_OPERAND_OPS = new Set([
  * node's own type, as in `int x = (float(u) % 2.0)`.
  *
  * A number the operand's type cannot represent is refused rather than quietly
- * reinterpreted. The backends disagreed about those: GLSL widened the operand
- * and then could not narrow the result back, while WGSL truncated the literal
- * and carried on.
+ * reinterpreted.
  */
 function typedOperand(value: any, operandType: string): BaseNode<ShaderType> {
   let isIntegral = operandType === "int" || operandType === "uint";
@@ -730,8 +720,7 @@ function op1(type: string, a: any): Node<ShaderType> {
  */
 function comp(type: string, a: any, b: any): Node<ShaderType> {
   // Comparisons need the same literal typing arithmetic gets: an unsigned
-  // operand compared against a plain number was reaching WGSL as `u32 < i32`,
-  // for which there is no overload.
+  // operand compared against a plain number must be typed accordingly.
   let first = wrapValue(a) as BaseNode<ShaderType>;
   let params = [first, typedOperand(b, (first as any)?._t || "float")];
   let widths = params.map(p => TYPE_WIDTH[(p as any)?._t] ?? 1);
@@ -1361,15 +1350,9 @@ function assertStageResult(
   if (positionWritten) return;
   // Otherwise the result becomes the position, and has to be able to.
   if (lastType === "vec4") return;
-  // Returning nothing used to end the check here, on the reading that there was
-  // no result to object to. But a vertex stage has to produce a position one
-  // way or the other, and one that does neither compiles to a main that sets no
-  // position at all — the shader-that-draws-nothing this exists to catch.
-  //
   // Whether a stage produced a value is a question about its type, not the text
-  // it compiled to. Asking the text meant comparing against "0.0", which is
-  // also how GLSL spells zero, so a vertex shader returning zero was read as
-  // returning nothing and slipped through.
+  // it compiled to. A vertex shader returning zero or returning nothing both
+  // fail the same check.
   throw new Error(
     `[RMSL] A vertex shader has to produce a position. This one `
     + (lastType === undefined || lastType === "void"
@@ -2003,9 +1986,7 @@ function compileGLSLWithStage(
   let hasVec4Result = lastType === "vec4" && !ctx.positionWritten;
   // A fragment stage that declares no output of its own still has to put its
   // colour somewhere, and GLSL ES 3.00 removed gl_FragColor, so an output is
-  // declared for it. This mirrors the WGSL backend, which already emitted an
-  // implicit colour output — without it the same program rendered on WebGPU
-  // and produced nothing on WebGL2.
+  // declared for it.
   let emitImplicitColor =
     shaderStage === "fragment" && ctx.outputs.size === 0 && hasVec4Result;
 
@@ -2031,10 +2012,7 @@ function compileGLSLWithStage(
       lines.push(`in ${info.type} ${info.slot};`);
     }
   });
-  // Numbered per shader, not from the id the output was declared with. That id
-  // is a module-wide counter, so the fifth output declared anywhere landed at
-  // location 4 even in a shader that had only one — past MAX_DRAW_BUFFERS soon
-  // enough for an app with a few materials.
+  // Numbered per shader, not from the id the output was declared with.
   let outputLocation = 0;
   ctx.outputs.forEach((info) => {
     if (info && info.slot && info.type) {
@@ -2134,9 +2112,7 @@ let typeToWGSL: Record<string, string> = {
  * `[columns, rows]` per matrix type. A GLSL/WGSL `matCxR` is C columns of R
  * rows, and the square names are the C === R shorthand.
  *
- * Every matrix type is listed. Holding only the square ones let the non-square
- * ones fall through the diagonal expansion below and reach WGSL as
- * `mat2x3<f32>(2f)`, which has no matching constructor.
+ * Every matrix type is listed.
  */
 const MATRIX_DIMENSIONS: Record<string, [number, number]> = {
   mat2: [2, 2], mat2x3: [2, 3], mat2x4: [2, 4],
@@ -2316,10 +2292,7 @@ export function wgslUniformLayout(
   };
 
   // Widest alignment first, so the gaps between members stay small. Members
-  // that align the same keep the order they were declared in: the tie used to
-  // be broken on the generated slot name, which carries a counter climbing for
-  // the life of the process, so the same program compiled twice could put its
-  // values at different addresses.
+  // that align the same keep the order they were declared in.
   const ordered = members
     .map((m, declaredAt) => ({ m, declaredAt }))
     .sort((a, b) => {

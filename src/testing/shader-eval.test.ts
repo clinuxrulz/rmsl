@@ -52,9 +52,7 @@ describe("float tolerance", () => {
 });
 
 describe.skipIf(EVALUATION_SKIPPED)("WGSL evaluation harness", () => {
-  // A failed compile leaves the readback buffer at its zero initialiser, so
-  // the harness used to report 0 — a value several tests legitimately expect.
-  // That made a broken backend indistinguishable from a correct one.
+  // A failed compile is reported as an error, not silently returned as zero.
   it("reports a shader that does not compile instead of returning zero", async () => {
     await expect(
       runWGSL(`@compute @workgroup_size(1) fn main() { this is not wgsl }`),

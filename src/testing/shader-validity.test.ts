@@ -21,8 +21,8 @@ describe("validation reporting", () => {
   });
 
   // One test routinely compiles many shaders — the breadth tests generate
-  // dozens each. Keying failures by test name alone let a later one overwrite
-  // an earlier one, so a run could report a single defect while hiding others.
+  // dozens each. Failures are keyed by test name and shader index to avoid
+  // overwriting.
   it("reports every failing shader from one test, not just the last", () => {
     const recorded = [
       shader("compiles every builtin", "wgsl", 0),
@@ -34,9 +34,7 @@ describe("validation reporting", () => {
     expect(report).toContain("lessThan");
   });
 
-  // Nothing recorded means nothing was checked. Returning success there is the
-  // failure mode this harness exists to prevent: a filtered run, or a test file
-  // that lost the aliased import, would look verified.
+  // Nothing recorded means nothing was checked.
   it("refuses to pass when no shader was recorded at all", () => {
     const report = validationReport([], [], [], {});
     expect(report).not.toBeNull();
@@ -49,8 +47,7 @@ describe("validation reporting", () => {
     expect(validationReport(recorded, ["some error"], [], known)).toBeNull();
   });
 
-  // A known-invalid entry that starts compiling has to be reported, or the list
-  // outlives the problems it documents.
+  // A known-invalid entry that now compiles is reported.
   it("reports a known-invalid entry that now compiles", () => {
     const recorded = [shader("a fixed test", "glsl", 0)];
     const known = { "glsl:a fixed test": "documented defect" };
@@ -59,8 +56,7 @@ describe("validation reporting", () => {
     expect(report).toContain("a fixed test");
   });
 
-  // A compiler that throws is recorded rather than swallowed, but both backends
-  // refusing a program is consistent and some tests assert exactly that.
+  // A compiler that throws is recorded rather than swallowed.
   it("ignores a program both backends refuse", () => {
     const recorded: Recorded[] = [
       { ...shader("both refuse", "glsl", 0), src: null, compileError: "nope" },
