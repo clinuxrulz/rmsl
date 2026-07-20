@@ -26,9 +26,12 @@
 
 import { expect } from "vitest";
 import {
-  compileGLSL, compileWGSL, type Node, type ShaderType, type VertexRoot,
+  compileGLSL,
+  compileWGSL,
+  type Node,
+  type ShaderType,
+  type VertexRoot,
 } from "../rmsl";
-import { compileGLSLInPage, gpuDevice, releaseGpu } from "./gpu";
 
 // This file only ever runs under vitest, in Node. Declared here rather than
 // depending on @types/node, which the package itself has no use for.
@@ -67,8 +70,7 @@ let nextPair = 0;
  * without removing its entry is itself reported, so the list cannot outlive
  * the problems it documents.
  */
-export const KNOWN_INVALID: Record<string, string> = {
-};
+export const KNOWN_INVALID: Record<string, string> = {};
 
 /**
  * Compile a program to *both* backends, whichever one the test asked for.
@@ -87,11 +89,13 @@ function recordBoth(root: any, stage: ShaderStage, want: ShaderLang): string {
   ]) {
     const entry: Recorded = { test, lang, stage, pair, src: null };
     try {
-      entry.src = stage === "vertex" ? compile.vertex(root) : compile.fragment(root);
+      entry.src =
+        stage === "vertex" ? compile.vertex(root) : compile.fragment(root);
     } catch (error) {
       // A backend refusing to compile is itself a signal, so it is recorded
       // rather than swallowed.
-      entry.compileError = error instanceof Error ? error.message : String(error);
+      entry.compileError =
+        error instanceof Error ? error.message : String(error);
     }
     entries.push(entry);
     recorded.push(entry);
@@ -99,7 +103,7 @@ function recordBoth(root: any, stage: ShaderStage, want: ShaderLang): string {
 
   // The caller's own compilation is one of these, so it is returned rather than
   // run a third time.
-  const wanted = entries.find(e => e.lang === want)!;
+  const wanted = entries.find((e) => e.lang === want)!;
   if (wanted.compileError) throw new Error(wanted.compileError);
   return wanted.src!;
 }
@@ -143,10 +147,12 @@ interface Compiler {
 
 function wrap(lang: ShaderLang): Compiler {
   return Object.assign(
-    (root: Node<ShaderType> | readonly Node<ShaderType>[]) => recordBoth(root, "fragment", lang),
+    (root: Node<ShaderType> | readonly Node<ShaderType>[]) =>
+      recordBoth(root, "fragment", lang),
     {
       vertex: (root: VertexRoot) => recordBoth(root as any, "vertex", lang),
-      fragment: (root: Node<ShaderType> | readonly Node<ShaderType>[]) => recordBoth(root, "fragment", lang),
+      fragment: (root: Node<ShaderType> | readonly Node<ShaderType>[]) =>
+        recordBoth(root, "fragment", lang),
     },
   );
 }
@@ -159,30 +165,34 @@ export const recordingGLSL = wrap("glsl");
 export const recordingWGSL = wrap("wgsl");
 
 /** Compile every recorded GLSL shader, in the shared browser page. */
-function validateGLSL(items: Recorded[]): Promise<(string | null)[]> {
-  return compileGLSLInPage(items.map(i => ({ src: i.src!, stage: i.stage })));
+async function validateGLSL(items: Recorded[]): Promise<(string | null)[]> {
+  const { compileGLSLInPage } = await import("./gpu");
+  return compileGLSLInPage(items.map((i) => ({ src: i.src!, stage: i.stage })));
 }
 
 /** Compile every recorded WGSL shader through Dawn. */
 async function validateWGSL(items: Recorded[]): Promise<(string | null)[]> {
   if (items.length === 0) return [];
+  const { gpuDevice } = await import("./gpu");
   const device = await gpuDevice();
 
   // pushErrorScope, createShaderModule and popErrorScope are all synchronous
   // stack operations — only the *result* of a pop is asynchronous. So every
   // module is created and its scope popped up front, and the results are
   // awaited together.
-  const pending = items.map(item => {
+  const pending = items.map((item) => {
     device.pushErrorScope("validation");
     device.createShaderModule({ code: item.src! });
     return device.popErrorScope();
   });
 
   const errors = await Promise.all(pending);
-  return errors.map(error =>
+  return errors.map((error) =>
     error
-      ? error.message.split("\n").find((l: string) => l.includes("error:"))?.trim()
-        ?? error.message.split("\n")[0]
+      ? (error.message
+          .split("\n")
+          .find((l: string) => l.includes("error:"))
+          ?.trim() ?? error.message.split("\n")[0])
       : null,
   );
 }
@@ -192,22 +202,22 @@ async function validateWGSL(items: Recorded[]): Promise<(string | null)[]> {
  * invalid shaders differs from `KNOWN_INVALID` in either direction.
  */
 export async function assertRecordedShadersValid(): Promise<void> {
-  // Mutation testing reruns the whole suite once per mutant, and launching a
-  // browser and a GPU device each time makes that intractable. Skipping is
-  // announced rather than silent, so a run without shader checking cannot be
-  // mistaken for one with it.
-  if (process.env.RMSL_SKIP_GPU || process.env.RMSL_SKIP_SHADER_VALIDATION) {
+  // GPU validation is opt-in via RMSL_GPU=1, to support development on
+  // systems where @kmamal/gpu is not available (e.g. Android Termux).
+  // Skipping is announced rather than silent, so a run without shader
+  // checking cannot be mistaken for one with it.
+  if (!process.env.RMSL_GPU || process.env.RMSL_SKIP_SHADER_VALIDATION) {
     process.stderr.write(
-      `\n[shader-validity] SKIPPED — ${recorded.length} shaders were recorded`
-      + ` but never handed to a real compiler.\n`,
+      `\n[shader-validity] SKIPPED — ${recorded.length} shaders were recorded` +
+        ` but never handed to a real compiler.\n`,
     );
     return;
   }
 
   // An entry whose compiler threw has no source to hand a validator; it is
   // already accounted for below.
-  const glsl = recorded.filter(r => r.lang === "glsl" && r.src !== null);
-  const wgsl = recorded.filter(r => r.lang === "wgsl" && r.src !== null);
+  const glsl = recorded.filter((r) => r.lang === "glsl" && r.src !== null);
+  const wgsl = recorded.filter((r) => r.lang === "wgsl" && r.src !== null);
 
   const [glslErrors, wgslErrors] = await Promise.all([
     validateGLSL(glsl),
@@ -216,6 +226,7 @@ export async function assertRecordedShadersValid(): Promise<void> {
 
   // Validation runs once, from an afterAll hook, so what it opened is released
   // here rather than left for the process to reclaim.
+  const { releaseGpu } = await import("./gpu");
   await releaseGpu();
 
   const report = validationReport(recorded, glslErrors, wgslErrors);
@@ -240,15 +251,17 @@ export function validationReport(
   // or a test file that lost the aliased import, would otherwise finish green
   // having verified none of the shaders it appears to cover.
   if (recorded.length === 0) {
-    return "Validated no shaders at all. Either the run was filtered down to"
-      + " tests that compile nothing, or a test file is importing compileGLSL"
-      + " / compileWGSL directly instead of the recording stand-ins in"
-      + " src/testing/shader-validity.ts. Set RMSL_SKIP_SHADER_VALIDATION=1 if"
-      + " skipping validation is what you meant.";
+    return (
+      "Validated no shaders at all. Either the run was filtered down to" +
+      " tests that compile nothing, or a test file is importing compileGLSL" +
+      " / compileWGSL directly instead of the recording stand-ins in" +
+      " src/testing/shader-validity.ts. Set RMSL_SKIP_SHADER_VALIDATION=1 if" +
+      " skipping validation is what you meant."
+    );
   }
 
-  const glsl = recorded.filter(r => r.lang === "glsl" && r.src !== null);
-  const wgsl = recorded.filter(r => r.lang === "wgsl" && r.src !== null);
+  const glsl = recorded.filter((r) => r.lang === "glsl" && r.src !== null);
+  const wgsl = recorded.filter((r) => r.lang === "wgsl" && r.src !== null);
 
   // Every failing shader is kept, not just the last one per test. A single test
   // routinely compiles dozens — the breadth tests loop over every builtin — and
@@ -266,10 +279,13 @@ export function validationReport(
     // exactly that — builtinFragDepth() in a vertex stage, for one. Only one
     // backend refusing what the other accepts is a gap worth reporting.
     const counterpart = recorded.find(
-      r => r.pair === entry.pair && r.lang !== entry.lang,
+      (r) => r.pair === entry.pair && r.lang !== entry.lang,
     );
     if (counterpart?.compileError) continue;
-    fail(`${entry.lang}:${entry.test}`, `did not compile — ${entry.compileError}`);
+    fail(
+      `${entry.lang}:${entry.test}`,
+      `did not compile — ${entry.compileError}`,
+    );
   }
   // Compared against null rather than tested for truthiness: an empty string is
   // a failure whose driver said nothing, and treating it as valid is how a lost
@@ -282,14 +298,14 @@ export function validationReport(
   });
 
   const unexpected = [...failed].filter(([key]) => !(key in known));
-  const fixed = Object.keys(known).filter(key => !failed.has(key));
+  const fixed = Object.keys(known).filter((key) => !failed.has(key));
 
   if (unexpected.length === 0 && fixed.length === 0) return null;
 
   const report: string[] = [
-    `Validated ${recorded.length} generated shaders from`
-    + ` ${new Set(recorded.map(r => r.test)).size} tests`
-    + ` (${glsl.length} GLSL, ${wgsl.length} WGSL).`,
+    `Validated ${recorded.length} generated shaders from` +
+      ` ${new Set(recorded.map((r) => r.test)).size} tests` +
+      ` (${glsl.length} GLSL, ${wgsl.length} WGSL).`,
   ];
 
   if (unexpected.length > 0) {

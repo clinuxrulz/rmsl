@@ -47,8 +47,15 @@ export function gpuPage(): Promise<any> {
 /** A WebGPU device, for handing WGSL to Dawn. */
 export function gpuDevice(): Promise<any> {
   devicePromise ??= (async () => {
-    const { create } = await import("@kmamal/gpu");
-    const adapter = await create([]).requestAdapter();
+    let gpu;
+    try {
+      gpu = await import("@kmamal/gpu");
+    } catch {
+      throw new Error(
+        "@kmamal/gpu is not installed. Set RMSL_GPU=1 only on systems with GPU support."
+      );
+    }
+    const adapter = await gpu.create([]).requestAdapter();
     if (!adapter) throw new Error("No WebGPU adapter available");
     return adapter.requestDevice();
   })();
@@ -103,5 +110,5 @@ export async function releaseGpu(): Promise<void> {
   if (device) (await device).destroy?.();
 }
 
-/** Whether the GPU-backed layers should run at all. */
-export const GPU_SKIPPED = !!process.env.RMSL_SKIP_GPU;
+/** Whether GPU support is enabled. */
+export const GPU_ENABLED = !!process.env.RMSL_GPU;

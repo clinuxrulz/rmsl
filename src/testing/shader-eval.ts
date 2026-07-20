@@ -14,7 +14,6 @@
 import {
   compileGLSLFn, compileWGSLFn, type Node,
 } from "../rmsl";
-import { gpuPage, gpuDevice, releaseGpu } from "./gpu";
 
 // Written to rather than console.warn: vitest intercepts console output and
 // does not surface it here, so a warning sent that way is not seen at all.
@@ -62,6 +61,7 @@ ${fn}
 layout(location=0) out vec4 result;
 void main() { result = vec4(${callExpr(args)}, 0.0, 0.0, 1.0); }`;
 
+  const { gpuPage } = await import("./gpu");
   const page = await gpuPage();
   {
     return await page.evaluate((fragment: string) => {
@@ -135,6 +135,7 @@ fn main() { result[0] = ${callExpr(args)}; }`);
  * a shader failing to compile is actually reported.
  */
 export async function runWGSL(code: string): Promise<number> {
+  const { gpuDevice } = await import("./gpu");
   const gpu = await gpuDevice();
 
   // A shader that fails to compile is reported as an uncaptured device error
@@ -201,6 +202,7 @@ export async function evaluateBoth(
 
 /** Release the browser and the graphics device held open across evaluations. */
 export async function closeEvaluators(): Promise<void> {
+  const { releaseGpu } = await import("./gpu");
   await releaseGpu();
 }
 
@@ -209,15 +211,15 @@ export async function closeEvaluators(): Promise<void> {
  *
  * Evaluation needs a GPU, and validation needs a browser, so both are worth
  * skipping in a mutation run. They are separate switches because they check
- * separate things: `RMSL_SKIP_GPU` turns off both, and each layer has its own
- * flag for turning off just that one.
+ * separate things: `RMSL_GPU` enables them, and each layer has its own
+ * flag for disabling just that one.
  *
  * Skipping is announced. This layer is the only thing checking what a shader
  * computes rather than whether it compiles, so a run without it silently
  * proves much less than it appears to.
  */
 export const EVALUATION_SKIPPED =
-  !!process.env.RMSL_SKIP_GPU || !!process.env.RMSL_SKIP_SHADER_EVALUATION;
+  !process.env.RMSL_GPU || !!process.env.RMSL_SKIP_SHADER_EVALUATION;
 
 if (EVALUATION_SKIPPED) {
   process.stderr.write(
