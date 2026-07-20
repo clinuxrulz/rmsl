@@ -10,6 +10,10 @@
 | `int` | `(v: number \| Node<"float">) => Node<"int">` | Int literal or cast from float |
 | `boolean` | `(v: boolean) => Node<"bool">` | Bool literal |
 
+`bvec2`, `bvec3` and `bvec4` complete the type set. They have no constructor:
+they are what a component-wise comparison produces. See
+[BoolVecOps](#boolvecops-bvec2-bvec3-bvec4).
+
 ### Vectors
 
 | Function | Signature | Description |
@@ -60,10 +64,35 @@
 
 **Binary:** `.pow(e)`, `.min(other)`, `.max(other)`, `.mod(other)`
 
-**Comparisons** (return `Node<"bool">`):
+`.mod()` on floats is floored, following GLSL's `mod()`, so the result takes the
+sign of the divisor: `float(-7.5).mod(float(2))` is `0.5`, not `-1.5`. On `int`
+and `uint` it is the `%` operator of each backend, which truncates toward zero
+and which GLSL leaves undefined when either operand is negative.
+
+**Interpolation:** `.mix(b, t)`, `.clamp(min, max)`, `.step(edge)`, `.smoothstep(edge0, edge1)`
+
+**Derivative:** `.fwidth()`
+
+**Comparisons:**
 `.lessThan(other)`, `.greaterThan(other)`, `.lessThanEqual(other)`, `.greaterThanEqual(other)`, `.equal(other)`, `.notEqual(other)`
 
-For scalar types these emit `a < b`; for vectors they emit `lessThan(a, b)` etc.
+Comparisons are component-wise, so the result has one boolean per component.
+Only scalars reduce to a single `bool`:
+
+| Receiver | Returns |
+|----------|---------|
+| `float`  | `Node<"bool">` |
+| `vec2`   | `Node<"bvec2">` |
+| `vec3`   | `Node<"bvec3">` |
+| `vec4`   | `Node<"bvec4">` |
+
+Scalars emit `a < b`; vectors emit `lessThan(a, b)` in GLSL and `a < b` in WGSL,
+both yielding a boolean vector. A scalar compared against a vector is broadcast
+to the vector's width, since neither language compares the two directly.
+
+```typescript
+let inside = pos.lessThan(vec3(1, 1, 1)).all();   // Node<"bool">
+```
 
 ### VecCommonOps (vec2, vec3, vec4)
 
@@ -77,8 +106,6 @@ For scalar types these emit `a < b`; for vectors they emit `lessThan(a, b)` etc.
 | `.refract(normal, eta)` | Self | Refraction vector |
 | `.clamp(min, max)` | Self | Component-wise clamp |
 | `.mix(b, t)` | Self | Linear interpolation |
-| `.step(edge)` | `float` | Step function |
-| `.smoothstep(edge0, edge1)` | Self | Smoothstep |
 
 ### Vec3Ops (vec3)
 
@@ -124,6 +151,26 @@ Same as IntOps but with `Node<"uint">` inputs/outputs.
 | `.and(other)` | `bool` | Logical AND |
 | `.or(other)` | `bool` | Logical OR |
 | `.not()` | `bool` | Logical NOT |
+
+### BoolVecOps (bvec2, bvec3, bvec4)
+
+The result of a component-wise comparison. There is no implicit path back to
+`bool` — "is this vector less than that one" has no single answer — so the
+reduction is spelled out.
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `.all()` | `bool` | True when every component is true |
+| `.any()` | `bool` | True when at least one component is true |
+| `.not()` | Self | Negates each component |
+
+```typescript
+let allInside = pos.lessThan(bounds).all();
+let anyOutside = pos.greaterThan(bounds).any();
+```
+
+`.not()` emits GLSL's `not(bvec)` — its `!` is scalar-only — and WGSL's `!`,
+which does apply to `vecN<bool>`.
 
 ## Swizzles
 
@@ -191,17 +238,18 @@ While(condition, () => {
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `uniform(type)` | `UniformNode<T>` | Declares a uniform (constant buffer input). Use `.name` for the generated name (e.g., `_rmsl_u0`), `.node()` for method chaining. |
-| `uniformRaw(name, type)` | `UniformNode<T>` | Declares a uniform with a custom name/slot (e.g., `uniformRaw("uMVP", "mat4")` emits `uniform mat4 uMVP`). Use `.name` for the custom name, `.node()` for method chaining. |
-| `attribute(type)` | `AttributeNode<T>` | Declares a vertex attribute. Use `.name` for the generated name (e.g., `_rmsl_a0`), `.node()` for method chaining. |
-| `varying(type)` | `VaryingNode<T>` | Declares a varying (vertex→fragment interpolant). Use `.name` for the generated name (e.g., `_rmsl_v0`), `.node()` for method chaining. |
+| `uniform(type)` | `UniformNode<T>` | Declares a uniform (constant buffer input). Use `.name` for the generated name (e.g., `_rmsl_u0`); methods and swizzles are available directly. |
+| `uniformRaw(name, type)` | `UniformNode<T>` | Declares a uniform with a custom name/slot (e.g., `uniformRaw("uMVP", "mat4")` emits `uniform mat4 uMVP`). Use `.name` for the custom name; methods and swizzles are available directly. |
+| `attribute(type)` | `AttributeNode<T>` | Declares a vertex attribute. Use `.name` for the generated name (e.g., `_rmsl_a0`); methods and swizzles are available directly. |
+| `varying(type)` | `VaryingNode<T>` | Declares a varying (vertex→fragment interpolant). Use `.name` for the generated name (e.g., `_rmsl_v0`); methods and swizzles are available directly. |
 | `output(type)` | `Node<T>` | Declares a fragment output with `@location(N)` |
 | `builtinPosition()` | `Node<"vec4">` | Maps to `gl_Position` / `@builtin(position)` |
 
-The `.node()` method returns a `Node<T>` with all type-specific methods (`.add()`, `.mult()`, `.x`, `.xyz`, etc.), while the original variable retains `.name`:
+A declared variable carries every method of its type (`.add()`, `.mult()`, `.x`,
+`.xyz`, ...) alongside `.name`:
 
 ```typescript
 let u = uniform("mat4");
-let uName = u.name;          // "_rmsl_u0"
-let result = u.node().mult(otherNode);  // method chaining
+let uName = u.name;             // "_rmsl_u0"
+let result = u.mult(otherNode); // methods are available directly
 ```

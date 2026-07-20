@@ -13,21 +13,11 @@ export let cameraProjectionMatrixInverse = uniform("mat4");
 export let cameraWorldMatrix = uniform("mat4");
 export let cameraPosition = uniform("vec3");
 
-// === Typed shader nodes (for method/swizzle chaining) ===
-export let quadPosNode = quadPos.node();
-export let positionWorldNode = positionWorld.node();
-export let positionGeometryNode = positionGeometry.node();
-export let cameraProjectionMatrixNode = cameraProjectionMatrix.node();
-export let cameraViewMatrixNode = cameraViewMatrix.node();
-export let cameraProjectionMatrixInverseNode = cameraProjectionMatrixInverse.node();
-export let cameraWorldMatrixNode = cameraWorldMatrix.node();
-export let cameraPositionNode = cameraPosition.node();
-
 // === Vertex shader — full-screen quad ===
 export let vertexMain = Fn(() => {
-  positionGeometryNode.assign(vec3(quadPosNode.x, quadPosNode.y, 0.0));
-  positionWorldNode.assign(vec3(quadPosNode.x, 0.0, quadPosNode.y));
-  return vec4(quadPosNode.x, quadPosNode.y, 0.0, 1.0);
+  positionGeometry.assign(vec3(quadPos.x, quadPos.y, 0.0));
+  positionWorld.assign(vec3(quadPos.x, 0.0, quadPos.y));
+  return vec4(quadPos.x, quadPos.y, 0.0, 1.0);
 });
 
 // === Fragment shader helpers ===
@@ -49,15 +39,15 @@ export let calcColourAndDepth = Fn(() => {
 
   If(isOrthographic, () => {
     rd.assign(vec3(
-      cameraViewMatrixNode.element(0).z,
-      cameraViewMatrixNode.element(1).z,
-      cameraViewMatrixNode.element(2).z,
+      cameraViewMatrix.element(0).z,
+      cameraViewMatrix.element(1).z,
+      cameraViewMatrix.element(2).z,
     ).negate().normalize());
-    ro.assign(positionWorldNode);
+    ro.assign(positionWorld);
   }).Else(() => {
-    ro.assign(cameraPositionNode);
-    let viewPos = cameraProjectionMatrixInverseNode.mult(vec4(positionGeometryNode.x, positionGeometryNode.y, -1.0, 1.0));
-    let worldDir = cameraWorldMatrixNode.mult(vec4(viewPos.x, viewPos.y, viewPos.z, 0.0));
+    ro.assign(cameraPosition);
+    let viewPos = cameraProjectionMatrixInverse.mult(vec4(positionGeometry.x, positionGeometry.y, -1.0, 1.0));
+    let worldDir = cameraWorldMatrix.mult(vec4(viewPos.x, viewPos.y, viewPos.z, 0.0));
     rd.assign(worldDir.xyz.normalize());
   });
 
@@ -98,9 +88,9 @@ export let calcColourAndDepth = Fn(() => {
     }).Else(() => {
       let refDist = float(1.0).toVar();
       If(isOrthographic, () => {
-        refDist.assign(float(1.0).div(cameraProjectionMatrixNode.element(0).x.abs().max(float(0.001))));
+        refDist.assign(float(1.0).div(cameraProjectionMatrix.element(0).x.abs().max(float(0.001))));
       }).Else(() => {
-        refDist.assign(cameraPositionNode.y.abs().mult(0.1).max(float(0.001)));
+        refDist.assign(cameraPosition.y.abs().mult(0.1).max(float(0.001)));
       });
       let exponent = refDist.log().div(float(Math.log(10))).floor().clamp(-3, 6);
       let minorSize = float(10.0).pow(exponent);
@@ -119,7 +109,7 @@ export let calcColourAndDepth = Fn(() => {
   If(rd.y.lessThan(-0.001), () => {
     let t = ro.y.negate().div(rd.y);
     let p = ro.add(rd.mult(t));
-    let clipPos = cameraProjectionMatrixNode.mult(cameraViewMatrixNode).mult(vec4(p.x, p.y, p.z, 1.0)).toVar();
+    let clipPos = cameraProjectionMatrix.mult(cameraViewMatrix).mult(vec4(p.x, p.y, p.z, 1.0)).toVar();
     let ndcZ = clipPos.z.div(clipPos.w);
     fragDepth.assign(ndcZ.mult(0.5).add(0.5));
   });

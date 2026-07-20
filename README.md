@@ -11,7 +11,7 @@ import { Fn, float, vec4, uniform, compileGLSL, compileWGSL } from "rmsl";
 let prog = Fn(() => {
   let color = uniform("vec4");
   let brightness = float(0.5).toVar();
-  return color.node().mult(brightness).toVar();
+  return color.mult(brightness).toVar();
 });
 
 let glsl = compileGLSL(prog());
@@ -33,6 +33,7 @@ let wgsl = compileWGSL(prog());
 - [Getting Started](https://github.com/clinuxrulz/rmsl/blob/main/docs/getting-started.md) - Quick setup and hello world
 - [API Reference](https://github.com/clinuxrulz/rmsl/blob/main/docs/api.md) - Full type system, constructors, and operations
 - [Compilation](https://github.com/clinuxrulz/rmsl/blob/main/docs/compilation.md) - GLSL/WGSL output, type mappings, binding model
+- [Contributing](https://github.com/clinuxrulz/rmsl/blob/main/CONTRIBUTING.md) - Test setup, and how to add an operation or a shader type
 
 ## Links
 

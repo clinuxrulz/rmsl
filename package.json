@@ -30,12 +30,28 @@
     "type-check": "tsc --noEmit",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "test": "vitest run"
+    "test": "RMSL_GPU=1 vitest run",
+    "test:setup": "playwright install chromium",
+    "test:fast": "vitest run",
+    "test:types": "vitest --typecheck.only --run",
+    "test:mutate": "stryker run",
+    "test:mutate:deep": "stryker run --timeoutMS 120000"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
+    "playwright": "^1.61.1",
     "typescript": "^5.7.2",
     "vite": "^7.1.4",
     "vite-plugin-dts": "^5.0.3",
     "vitest": "^4.1.3"
+  },
+  "optionalDependencies": {
+    "@kmamal/gpu": "^0.2.1"
+  },
+  "pnpm": {
+    "neverBuiltDependencies": [
+      "@kmamal/gpu"
+    ]
   }
 }

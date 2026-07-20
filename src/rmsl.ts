@@ -4,6 +4,7 @@ const __brand = Symbol();
 export type ShaderType =
   | "float" | "vec2" | "vec3" | "vec4"
   | "int" | "uint" | "bool"
+  | "bvec2" | "bvec3" | "bvec4"
   | "mat2" | "mat2x3" | "mat2x4"
   | "mat3x2" | "mat3" | "mat3x4"
   | "mat4x2" | "mat4x3" | "mat4"
@@ -32,14 +33,30 @@ export interface BaseNode<A extends ShaderType> {
 }
 
 // === Typed node types with variable name access ===
-export interface VariableNode<A extends ShaderType> extends BaseNode<A> {
+/**
+ * A uniform, attribute or varying. Carries its type's operations directly, so
+ * it can be used wherever a `Node<A>` can.
+ */
+export type VariableNode<A extends ShaderType> = Node<A> & {
   name: string;
-  node(): Node<A>;
-}
+};
 
-export interface UniformNode<A extends ShaderType> extends VariableNode<A> {}
-export interface AttributeNode<A extends ShaderType> extends VariableNode<A> {}
-export interface VaryingNode<A extends ShaderType> extends VariableNode<A> {}
+// Aliases rather than interfaces: `Node<A>` resolves through an indexed access,
+// and an interface may only extend a type whose members are statically known.
+export type UniformNode<A extends ShaderType> = VariableNode<A>;
+
+/**
+ * A uniform array. Not a `Node<A>` itself — the array as a whole has no value,
+ * only its elements do, so it exposes `element()` rather than the operations of
+ * its element type.
+ */
+export interface UniformArrayNode<A extends ShaderType> {
+  readonly name: string;
+  readonly length: number;
+  element(index: IntLike | FloatLike): Node<A>;
+}
+export type AttributeNode<A extends ShaderType> = VariableNode<A>;
+export type VaryingNode<A extends ShaderType> = VariableNode<A>;
 
 // === Type guards for node type checking ===
 export function isUniformNode<T extends ShaderType>(node: Node<T> | VariableNode<T>): node is UniformNode<T> {
@@ -78,18 +95,42 @@ type Vec2Swizzles = {
 };
 
 // === Node (branded + conditional methods + swizzles) ===
-export type Node<A extends ShaderType> = BaseNode<A>
-  & (A extends "float" ? ArithOps<"float"> & FloatMathOps<"float"> : {})
-  & (A extends "vec2" ? ArithOps<"vec2"> & FloatMathOps<"vec2"> & VecCommonOps<"vec2"> & Vec2Swizzles : {})
-  & (A extends "vec3" ? ArithOps<"vec3"> & FloatMathOps<"vec3"> & VecCommonOps<"vec3"> & Vec3Ops & Vec3Swizzles : {})
-  & (A extends "vec4" ? ArithOps<"vec4"> & FloatMathOps<"vec4"> & VecCommonOps<"vec4"> & Vec4Swizzles : {})
-  & (A extends "mat3" ? MatOps<"mat3"> : {})
-  & (A extends "mat4" ? MatOps<"mat4"> : {})
-  & (A extends "int" ? IntOps : {})
-  & (A extends "uint" ? UintOps : {})
-  & (A extends "bool" ? BoolOps : {})
-  & (A extends "sampler2D" ? SamplerOps : {})
-  & NodeMethods<A>;
+/**
+ * Which operations each shader type carries.
+ *
+ * A registry rather than a chain of conditionals. Defunctionalising the
+ * dispatch into a lookup provides a single indexed access, and the interface's
+ * members stay lazy.
+ *
+ * Every ShaderType needs an entry, so a new type cannot be added without
+ * saying what it supports.
+ */
+interface NodeOps {
+  float: ArithOps<"float"> & FloatMathOps<"float"> & ComparisonOps<"bool", FloatLike>;
+  vec2: ArithOps<"vec2"> & FloatMathOps<"vec2"> & ComparisonOps<"bvec2", Vec2Like | FloatLike> & VecCommonOps<"vec2"> & Vec2Swizzles;
+  vec3: ArithOps<"vec3"> & FloatMathOps<"vec3"> & ComparisonOps<"bvec3", Vec3Like | FloatLike> & VecCommonOps<"vec3"> & Vec3Ops & Vec3Swizzles;
+  vec4: ArithOps<"vec4"> & FloatMathOps<"vec4"> & ComparisonOps<"bvec4", Vec4Like | FloatLike> & VecCommonOps<"vec4"> & Vec4Swizzles;
+  int: IntOps;
+  uint: UintOps;
+  bool: BoolOps;
+  bvec2: BoolVecOps<"bvec2">;
+  bvec3: BoolVecOps<"bvec3">;
+  bvec4: BoolVecOps<"bvec4">;
+  mat2: MatOps<"mat2", "vec2">;
+  mat2x3: RectMatOps<"vec2", "vec3", "mat3x2">;
+  mat2x4: RectMatOps<"vec2", "vec4", "mat4x2">;
+  mat3x2: RectMatOps<"vec3", "vec2", "mat2x3">;
+  mat3: MatOps<"mat3", "vec3">;
+  mat3x4: RectMatOps<"vec3", "vec4", "mat4x3">;
+  mat4x2: RectMatOps<"vec4", "vec2", "mat2x4">;
+  mat4x3: RectMatOps<"vec4", "vec3", "mat3x4">;
+  mat4: MatOps<"mat4", "vec4">;
+  sampler2D: SamplerOps;
+  samplerCube: CubeSamplerOps;
+  void: {};
+}
+
+export type Node<A extends ShaderType> = BaseNode<A> & NodeOps[A] & NodeMethods<A>;
 
 // === Operation interfaces (shared across Node types) ===
 interface ArithOps<A extends ShaderType> {
@@ -113,13 +154,42 @@ interface FloatMathOps<A extends ShaderType> {
   mod(other: FloatLike): Node<A>;
   mix(b: Node<A>, t: FloatLike): Node<A>;
   clamp(min: FloatLike, max: FloatLike): Node<A>;
+  // Declared here rather than on VecCommonOps so floats get them too, and so
+  // there is only one declaration: both interfaces apply to the vector types,
+  // and two declarations disagreeing about the return type leaves the caller
+  // with whichever the checker resolves first.
+  //
+  // Both edge forms are valid — GLSL has step(genType, genType) alongside
+  // step(float, genType), and likewise for smoothstep.
+  step(edge: Node<A> | FloatLike): Node<A>;
+  smoothstep(edge0: Node<A> | FloatLike, edge1: Node<A> | FloatLike): Node<A>;
   fwidth(): Node<A>;
-  lessThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
-  greaterThan(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
-  lessThanEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
-  greaterThanEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
-  equal(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
-  notEqual(other: FloatLike | Vec2Like | Vec3Like | Vec4Like): Node<"bool">;
+}
+
+/**
+ * Component-wise comparisons, parameterised by their result type and by what
+ * they accept.
+ *
+ * The operand is a parameter because the result width follows the wider of the
+ * two sides. A vector may be compared against a scalar — the scalar is
+ * broadcast, which is what the caller means — but a scalar compared against a
+ * vector would produce a boolean per component while the receiver's row here
+ * promises a single `bool`, so the two disagreed. Naming the operand per type
+ * makes that combination a type error rather than a node whose runtime type
+ * contradicts its declared one.
+ *
+ * Attached per concrete node type below rather than derived with a conditional:
+ * resolving `Node<Conditional<A>>` for a generic `A` forces the checker to
+ * expand the whole `Node` intersection at every call site, which exhausts its
+ * heap.
+ */
+interface ComparisonOps<R extends ShaderType, Operand> {
+  lessThan(other: Operand): Node<R>;
+  greaterThan(other: Operand): Node<R>;
+  lessThanEqual(other: Operand): Node<R>;
+  greaterThanEqual(other: Operand): Node<R>;
+  equal(other: Operand): Node<R>;
+  notEqual(other: Operand): Node<R>;
 }
 
 interface VecCommonOps<A extends "vec2" | "vec3" | "vec4"> {
@@ -131,23 +201,54 @@ interface VecCommonOps<A extends "vec2" | "vec3" | "vec4"> {
   refract(normal: Node<A>, eta: FloatLike): Node<A>;
   clamp(min: Node<A> | FloatLike, max: Node<A> | FloatLike): Node<A>;
   mix(b: Node<A>, t: FloatLike): Node<A>;
-  step(edge: Node<A> | FloatLike): Node<"float">;
-  smoothstep(edge0: Node<A> | FloatLike, edge1: Node<A> | FloatLike): Node<A>;
+  // step/smoothstep live on FloatMathOps, which also applies to every vector
+  // type.
 }
 
 interface Vec3Ops {
   cross(other: Node<"vec3">): Node<"vec3">;
 }
 
-interface MatOps<A extends "mat3" | "mat4"> {
-  mult(other: Node<A>): Node<A>;
-  mult(other: Node<"vec3">): Node<"vec3">;
-  mult(other: Node<"vec4">): Node<"vec4">;
+/**
+ * A square matrix. `Vec` is the vector of its own width: what one of its
+ * columns is, and what multiplying it by a vector both takes and gives.
+ */
+interface MatOps<Self extends ShaderType, Vec extends ShaderType> {
+  mult(other: Node<Self>): Node<Self>;
+  mult(other: Node<Vec>): Node<Vec>;
   multVec(other: Node<"vec3">): Node<"vec3">;
   multVec4(other: Node<"vec4">): Node<"vec4">;
-  element(i: IntLike): Node<A extends "mat3" ? "vec3" : "vec4">;
-  inverse(): Node<A>;
-  transpose(): Node<A>;
+  element(i: IntLike): Node<Vec>;
+  inverse(): Node<Self>;
+  transpose(): Node<Self>;
+}
+
+/**
+ * A matrix that is not square. A matCxR holds C columns of R rows, so it
+ * multiplies a vecC to give a vecR, one of its columns is a vecR, and
+ * transposing it gives a matRxC.
+ *
+ * There is deliberately no inverse: only a square matrix has one, and neither
+ * target language offers the overload.
+ *
+ * Written out per type rather than derived from `Self` with conditionals. A
+ * conditional that resolves to a `Node` makes the checker expand the whole
+ * intersection at every use, which is what exhausted its heap before.
+ */
+interface RectMatOps<
+  Operand extends ShaderType,
+  Column extends ShaderType,
+  Transposed extends ShaderType,
+> {
+  mult(other: Node<Operand>): Node<Column>;
+  element(i: IntLike): Node<Column>;
+  transpose(): Node<Transposed>;
+}
+
+/** A cube map is sampled with a direction rather than a surface coordinate. */
+interface CubeSamplerOps {
+  texture(coords: Vec3Like): Node<"vec4">;
+  textureLod(coords: Vec3Like, lod: FloatLike): Node<"vec4">;
 }
 
 interface IntOps {
@@ -199,6 +300,20 @@ interface BoolOps {
   not(): Node<"bool">;
 }
 
+/**
+ * A component-wise comparison result. There is deliberately no implicit path
+ * to `bool`: "is this vector less than that one" has no single answer, so the
+ * reduction is spelled out with `all()` or `any()`.
+ */
+interface BoolVecOps<A extends ShaderType> {
+  /** True when every component is true. */
+  all(): Node<"bool">;
+  /** True when at least one component is true. */
+  any(): Node<"bool">;
+  /** Negates each component. */
+  not(): Node<A>;
+}
+
 interface NodeMethods<A extends ShaderType> {
   toVar(): Node<A>;
   assign(value: BaseNode<A> | Node<A>): void;
@@ -219,16 +334,23 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
     this.value = config.value;
   }
 
-  node(): Node<A> {
-    return this as unknown as Node<A>;
-  }
-
   // === ArithOps ===
   add(other: any): any { return op("add", this, other); }
   sub(other: any): any { return op("sub", this, other); }
   mult(other: any): any {
-    if ((this._t === "mat3" || this._t === "mat4") && (other._t === "vec3" || other._t === "vec4")) {
-      return node({ _t: other._t, type: "matVecMul", params: [this as BaseNode<ShaderType>, wrapValue(other) as BaseNode<ShaderType>] });
+    // A matCxR times a vecC gives a vecR. The result type is determined by the
+    // vector dimension, not the matrix type.
+    let shape = MATRIX_DIMENSIONS[this._t];
+    let otherType = other?._t;
+    if (
+      shape !== undefined && typeof otherType === "string"
+      && otherType.startsWith("vec") && TYPE_WIDTH[otherType] === shape[0]
+    ) {
+      return node({
+        _t: `vec${shape[1]}`,
+        type: "matVecMul",
+        params: [this as BaseNode<ShaderType>, wrapValue(other) as BaseNode<ShaderType>],
+      });
     }
     return op("mult", this, other);
   }
@@ -267,16 +389,8 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   notEqual(other: any) { return comp("notEqual", this, other); }
 
   // === VecCommonOps ===
-  dot(other: any): any {
-    let r = op("dot", this, other);
-    r._t = "float";
-    return r;
-  }
-  length(): any {
-    let r = op1("length", this);
-    r._t = "float";
-    return r;
-  }
+  dot(other: any): any { return op("dot", this, other); }
+  length(): any { return op1("length", this); }
   normalize(): any { return op1("normalize", this); }
   distance(other: any): any { return op("distance", this, other); }
   reflect(normal: any): any { return op("reflect", this, normal); }
@@ -297,7 +411,14 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   multVec4(other: any): any {
     return node({ _t: "vec4", type: "matVecMul", params: [this as BaseNode<ShaderType>, wrapValue(other) as BaseNode<ShaderType>] });
   }
-  element(i: any): any { return op("matrixElement", this, i); }
+  // The argument is an index, so a plain number is always typed as an integer.
+  element(i: any): any {
+    return op(
+      "matrixElement",
+      this,
+      typeof i === "number" ? node({ _t: "int", type: "int", value: i | 0 }) : i,
+    );
+  }
   inverse() { return op1("inverse", this); }
   transpose() { return op1("transpose", this); }
 
@@ -328,6 +449,8 @@ class NodeImpl<A extends ShaderType> implements BaseNode<A> {
   and(other: any): any { return op("and", this, other); }
   or(other: any): any { return op("or", this, other); }
   not(): any { return op1("not", this); }
+  all(): any { return node({ _t: "bool", type: "all", params: [this as BaseNode<ShaderType>] }); }
+  any(): any { return node({ _t: "bool", type: "any", params: [this as BaseNode<ShaderType>] }); }
 
   // === NodeMethods ===
   assign(value: BaseNode<A>): void {
@@ -456,21 +579,167 @@ function wrapValue<V>(x: V): Node<ExtractType<V>> {
   return x as any;
 }
 
+/**
+ * Ops whose result type is not the type of their first operand.
+ *
+ * Most ops are type-preserving — `vec3 + vec3` is a vec3 — so the default is to
+ * inherit from the first operand. These reduce instead, and their `Node` type
+ * parameter says so. Without an entry here the node's runtime `_t` disagrees
+ * with its declared type, and downstream code that switches on `_t` (variable
+ * declarations, the scalar-vs-vector split in comparison codegen) picks the
+ * wrong branch.
+ */
+const REDUCING_OPS: Record<string, string | ((operandType: string) => string)> = {
+  dot: "float",
+  length: "float",
+  distance: "float",
+  // Transposing swaps columns for rows, so a matCxR becomes a matRxC. A square
+  // matrix keeps its type, which is why this only matters once the non-square
+  // ones are reachable.
+  transpose: (operandType) => {
+    let shape = MATRIX_DIMENSIONS[operandType];
+    if (shape === undefined) return operandType;
+    let [columns, rows] = shape;
+    return columns === rows ? operandType : `mat${rows}x${columns}`;
+  },
+  // A matrix column, so it has as many components as the matrix has rows —
+  // a mat2x3 is two columns of three, and indexing it gives a vec3. Expressed
+  // as a function because unlike the others it depends on the operand.
+  matrixElement: (operandType) => {
+    let shape = MATRIX_DIMENSIONS[operandType];
+    return shape === undefined ? "float" : `vec${shape[1]}`;
+  },
+};
+
+/** The result type of an op, given the type of the operand that defines it. */
+function resultType(op: string, operandType: string): string {
+  let reducing = REDUCING_OPS[op];
+  if (reducing === undefined) return operandType;
+  return typeof reducing === "function" ? reducing(operandType) : reducing;
+}
+
+/** Component count per type, for the operations whose width follows it. */
+const TYPE_WIDTH: Record<string, number> = {
+  float: 1, int: 1, uint: 1, bool: 1,
+  vec2: 2, vec3: 3, vec4: 4,
+  bvec2: 2, bvec3: 3, bvec4: 4,
+};
+
+/**
+ * Where an op's defining operand sits, when it is not the first.
+ *
+ * Params are emitted in the order the target language expects, and GLSL takes
+ * the value last in `step(edge, x)` and `smoothstep(e0, e1, x)`. Reading the
+ * type from the first operand there gives the edge's, so `vec3.step(0.5)`
+ * produced a node typed float around a call that returns vec3.
+ */
+const VALUE_OPERAND: Record<string, number> = {
+  step: 1,
+  smoothstep: 2,
+};
+
+/**
+ * Ops whose operands must all share the defining operand's type.
+ *
+ * Their signatures accept `Node<A> | FloatLike`, so a scalar can be passed
+ * where a vector is expected — `vec3.step(0.5)`. GLSL tolerates some of those
+ * and WGSL none of them, so rather than patch each backend the scalar is
+ * broadcast once here and both receive operands that already agree.
+ *
+ * Ops taking a genuinely scalar argument are absent by design: `mix(a, b, t)`
+ * and `refract(i, n, eta)` declare that argument `FloatLike`, and broadcasting
+ * it would produce `refract(vec3, vec3, vec3)`, which neither language has.
+ */
+const UNIFORM_OPERAND_OPS = new Set([
+  "step", "smoothstep", "clamp", "min", "max", "pow", "mod",
+]);
+
+/**
+ * Give a plain JavaScript number the type of the operand it sits beside.
+ *
+ * A number carries no shader type of its own and wrapValue can only guess — it
+ * picks float. Beside an integer operand that guess is wrong: the two operands
+ * disagree, codegen inserts a conversion, and the result stops matching the
+ * node's own type, as in `int x = (float(u) % 2.0)`.
+ *
+ * A number the operand's type cannot represent is refused rather than quietly
+ * reinterpreted.
+ */
+function typedOperand(value: any, operandType: string): BaseNode<ShaderType> {
+  let isIntegral = operandType === "int" || operandType === "uint";
+  if (typeof value !== "number" || !isIntegral) {
+    return wrapValue(value) as BaseNode<ShaderType>;
+  }
+  if (!Number.isInteger(value)) {
+    throw new Error(
+      `[RMSL] ${value} is not a whole number, but the operand beside it is an `
+      + `${operandType}. Convert the operand to a float, or use a whole number.`,
+    );
+  }
+  if (operandType === "uint" && value < 0) {
+    throw new Error(
+      `[RMSL] ${value} is negative, but the operand beside it is unsigned. `
+      + `Use a signed operand, or a literal that is not negative.`,
+    );
+  }
+  return node({ _t: operandType, type: operandType, value }) as BaseNode<ShaderType>;
+}
+
 function op(type: string, ...args: any[]): Node<ShaderType> {
-  let params = args.map(a => wrapValue(a) as BaseNode<ShaderType>);
-  let firstT = (params[0] as any)?._t || "float";
-  return node({ _t: firstT, type, params });
+  let first = wrapValue(args[0]) as BaseNode<ShaderType>;
+  let firstT = (first as any)?._t || "float";
+  let params = [first, ...args.slice(1).map(a => typedOperand(a, firstT))];
+  // The operand that defines the op's type — usually the first, but `step` and
+  // `smoothstep` take the value last because that is the argument order both
+  // languages expect.
+  let valueIndex = VALUE_OPERAND[type] ?? 0;
+  let valueT = (params[valueIndex] as any)?._t ?? firstT;
+
+  if (UNIFORM_OPERAND_OPS.has(type) && (TYPE_WIDTH[valueT] ?? 1) > 1) {
+    params = params.map(p =>
+      (TYPE_WIDTH[(p as any)?._t] ?? 1) === 1
+        ? node({ _t: valueT, type: "construct", params: [p] }) as BaseNode<ShaderType>
+        : p,
+    );
+  }
+
+  return node({ _t: resultType(type, valueT), type, params });
 }
 
 function op1(type: string, a: any): Node<ShaderType> {
   let wrapped = wrapValue(a) as BaseNode<ShaderType>;
   let t = (wrapped as any)?._t || "float";
-  return node({ _t: t, type, params: [wrapped] });
+  return node({ _t: resultType(type, t), type, params: [wrapped] });
 }
 
-function comp(type: string, a: any, b: any): Node<"bool"> {
-  let params = [wrapValue(a) as BaseNode<ShaderType>, wrapValue(b) as BaseNode<ShaderType>];
-  return node({ _t: "bool", type, params }) as Node<"bool">;
+/**
+ * Comparisons are component-wise, so comparing vectors yields one boolean per
+ * component — `bvec3` for vec3 — and only scalars reduce to a single `bool`.
+ * This mirrors GLSL, where `lessThan(vec3, vec3)` is a bvec3, and matches how
+ * Three.js's TSL types the same operations.
+ */
+function comp(type: string, a: any, b: any): Node<ShaderType> {
+  // Comparisons need the same literal typing arithmetic gets: an unsigned
+  // operand compared against a plain number must be typed accordingly.
+  let first = wrapValue(a) as BaseNode<ShaderType>;
+  let params = [first, typedOperand(b, (first as any)?._t || "float")];
+  let widths = params.map(p => TYPE_WIDTH[(p as any)?._t] ?? 1);
+  let width = Math.max(widths[0], widths[1]);
+
+  // Neither language compares a vector against a scalar: GLSL has no
+  // lessThan(vec3, float) and WGSL no `operator < (vec3<f32>, f32)`. The
+  // signatures accept the mix, so the scalar is broadcast to the vector's
+  // width — `lessThan(v, vec3(0.5))` — which is what the caller meant.
+  if (width > 1) {
+    let wide = (params[widths[0] >= widths[1] ? 0 : 1] as any)._t as ShaderType;
+    params = params.map((p, i) =>
+      widths[i] === 1
+        ? node({ _t: wide, type: "construct", params: [p] }) as BaseNode<ShaderType>
+        : p,
+    );
+  }
+
+  return node({ _t: width > 1 ? `bvec${width}` : "bool", type, params });
 }
 
 function swizzle<A extends ShaderType>(src: BaseNode<ShaderType>, pattern: string): Node<A> {
@@ -504,7 +773,7 @@ export function assertBlockScope(
 // Supports single return: Fn(() => { ...; return x; }) -> () => Node<A>
 // Supports multi return: Fn(() => { ...; return [a, b]; }) -> () => [Node<A>, Node<B>]
 // Supports parameters: Fn((a: Node<"float">, b: Node<"float">) => a.add(b)) -> (a, b) => Node<"float">
-export function Fn<T extends any[], R>(fn: (...args: T) => R): (...args: T) => R {
+export function Fn<T extends any[], const R>(fn: (...args: T) => R): (...args: T) => R {
   return ((...args: T) => {
     let oldBlockScope = blockScope;
     try {
@@ -689,6 +958,56 @@ let nextUniformId = 0;
 let nextAttrId = 0;
 let nextVaryingId = 0;
 
+/**
+ * A uniform holding several values of one type.
+ *
+ * Declaring N separate uniforms instead costs N slots, and WGSL allows only 12
+ * uniform buffers per stage; an array is one slot however long it is. It also
+ * lets the shader loop over the elements rather than unrolling a test per
+ * value.
+ *
+ * The length is given rather than the values, since the host writes the
+ * contents by name — unlike TSL's `uniformArray(values, type)`, where the node
+ * owns the data.
+ *
+ *   const bricks = uniformArray("vec4", 24);
+ *   bricks.element(i)            // indexed by a node, inside a loop
+ *   bricks.element(3)            // or by a constant
+ */
+export function uniformArray<T extends ShaderType>(
+  shaderType: T,
+  length: number,
+): UniformArrayNode<T> {
+  if (!Number.isInteger(length) || length < 1) {
+    throw new Error(`[RMSL] uniformArray length must be a positive integer, got ${length}`);
+  }
+  if (shaderType === "sampler2D" || shaderType === "samplerCube") {
+    throw new Error(
+      `[RMSL] uniformArray cannot hold a texture. WGSL has no array of separate`
+      + ` texture bindings without an extension, so there is no spelling both`
+      + ` backends share — Three.js does not offer one either. Declare each`
+      + ` texture on its own, or use a layered array texture, which both`
+      + ` languages do have.`,
+    );
+  }
+  let id = nextUniformId++;
+  let slot = `_rmsl_u${id}`;
+  const arrayNode = node({
+    _t: shaderType,
+    type: "uniformArray",
+    value: { id, slot, shaderType, length },
+    name: slot,
+  }) as any;
+  arrayNode.length = length;
+  arrayNode.element = (index: IntLike | FloatLike) =>
+    node({
+      _t: shaderType,
+      type: "uniformArrayElement",
+      params: [arrayNode, wrapValue(index) as BaseNode<ShaderType>],
+    });
+  return arrayNode as UniformArrayNode<T>;
+}
+
 export function uniform<T extends ShaderType>(shaderType: T): UniformNode<T> {
   let id = nextUniformId++;
   const result = node({
@@ -859,15 +1178,48 @@ export function continue_(): void {
 // ==== COMPILERS ====
 
 // ========== GLSL Compiler ==========
+/** What compiling one node yields: statements to emit, and how to refer to it. */
+interface CompiledNode {
+  decls: string[];
+  body: string[];
+  expr: string;
+}
+
 interface CompileCtx {
   nextId: number;
   shaderStage: "vertex" | "fragment";
-  uniforms: Map<number, { type: string; slot: string }>;
+  /** `length` is set only for uniform arrays, and gives their element count. */
+  uniforms: Map<number, { type: string; slot: string; length?: number }>;
   attributes: Map<number, { type: string; slot: string }>;
   varyings: Map<number, { type: string; slot: string }>;
   outputs: Map<number, { type: string; slot: string; location: number }>;
   wgslSamplers: Map<string, { textureSlot: string; samplerSlot: string }>;
   varDefs: Map<string, string>;
+  /**
+   * What each node already compiled to, keyed by the node itself.
+   *
+   * The graph is a directed acyclic graph, not a tree: `Fn` returning an array
+   * gives every element the whole block scope, so one node is reachable from
+   * several roots — as the same object, not a copy. Compiling it once per root
+   * repeats whatever it does, which for a declaration is a redefinition and for
+   * an assignment or a loop is the work happening twice.
+   *
+   * So a node is compiled the first time it is reached and its statements are
+   * emitted there. Later arrivals get its expression alone, since the
+   * statements producing that expression are already in the output.
+   */
+  memo: Map<BaseNode<ShaderType>, CompiledNode>;
+  /**
+   * Names of WGSL helper functions the shader needs, emitted ahead of the entry
+   * point. GLSL provides some builtins that WGSL does not, so they are written
+   * out on demand rather than always.
+   */
+  wgslHelpers: Set<string>;
+  /**
+   * Whether the program assigned the position itself. A vertex stage that has
+   * done so needs no implicit write, and its result is free to be anything.
+   */
+  positionWritten: boolean;
   inFn: boolean;
   fragDepthUsed: boolean;
 }
@@ -875,6 +1227,7 @@ interface CompileCtx {
 let typeToGLSL: Record<string, string> = {
   float: "float", vec2: "vec2", vec3: "vec3", vec4: "vec4",
   int: "int", uint: "uint", bool: "bool",
+  bvec2: "bvec2", bvec3: "bvec3", bvec4: "bvec4",
   mat2: "mat2", mat2x3: "mat2x3", mat2x4: "mat2x4",
   mat3x2: "mat3x2", mat3: "mat3", mat3x4: "mat3x4",
   mat4x2: "mat4x2", mat4x3: "mat4x3", mat4: "mat4",
@@ -906,7 +1259,16 @@ function tryFold(n: BaseNode<ShaderType>): BaseNode<ShaderType> | null {
       case "mult": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (a * b) | 0 : a * b });
       case "div": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (a / b) | 0 : a / b });
       case "negate": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (-a) | 0 : -a });
-      case "mod": return mkNode({ _t: t, type: t, value: t === "int" || t === "uint" ? (a % b) | 0 : a % b });
+      // JavaScript's % truncates toward zero. The float operation is floored,
+      // following GLSL's mod(), so folding it with % would give a literal that
+      // disagrees with what the same expression computes when its operands are
+      // not constants. The integer path keeps % because that is what both
+      // backends emit for integers.
+      case "mod": return mkNode({
+        _t: t,
+        type: t,
+        value: t === "int" || t === "uint" ? (a % b) | 0 : a - b * Math.floor(a / b),
+      });
       case "sin": return mkNode({ _t: t, type: t, value: Math.sin(a) });
       case "cos": return mkNode({ _t: t, type: t, value: Math.cos(a) });
       case "tan": return mkNode({ _t: t, type: t, value: Math.tan(a) });
@@ -936,10 +1298,135 @@ function mkNode(config: { _t?: string; type: string; params?: BaseNode<ShaderTyp
   return new NodeImpl({ _t: config._t ?? config.type, type: config.type, params: config.params, value: config.value }) as BaseNode<ShaderType>;
 }
 
+/**
+ * Render a for-loop's update clause.
+ *
+ * The clause is authored as statements — `(i) => i.assign(i.add(1))` — so it
+ * arrives with its work in `body` and only a bare variable reference in `expr`.
+ * Emitting `expr` alone drops the increment and produces an infinite loop.
+ *
+ * GLSL's update slot accepts a comma expression, so every statement survives.
+ * WGSL's grammar allows exactly one update statement, so callers there keep
+ * the last.
+ */
+function forUpdateStatements(update: CompiledNode): string[] {
+  // A nested block cannot go in either language's update slot: GLSL's takes an
+  // expression, and accepting one in WGSL alone would make a program that runs
+  // on one backend and not the other.
+  if (update.body.some(line => line.includes("{"))) {
+    throw new Error(
+      "[RMSL] A for-loop's update cannot contain a block. Move the branch into "
+      + "the loop body, or write the loop with While.",
+    );
+  }
+  return update.body;
+}
+
+/** Drop a trailing semicolon, for the slots that take an expression. */
+function withoutSemicolon(statement: string): string {
+  return statement.endsWith(";") ? statement.slice(0, -1) : statement;
+}
+
+/**
+ * Reject a vertex stage whose result cannot reach the position output.
+ *
+ * That output is a vec4 and writing it is not optional, so a vertex shader
+ * returning anything else is unambiguously a mistake: a value was produced and
+ * has nowhere to go. Skipping the write instead would link cleanly and draw
+ * nothing, which is the silent-corruption failure mode the unhandled-node case
+ * throws to avoid.
+ *
+ * A fragment stage is deliberately not checked. A shader with no colour output
+ * is legal, so "no result" there is a choice rather than a mistake.
+ */
+function assertStageResult(
+  shaderStage: "vertex" | "fragment",
+  lastType: string | undefined,
+  positionWritten: boolean,
+): void {
+  if (shaderStage !== "vertex") return;
+  // The program set the position itself, so its result has nowhere it needs to
+  // go and can be anything, including nothing.
+  if (positionWritten) return;
+  // Otherwise the result becomes the position, and has to be able to.
+  if (lastType === "vec4") return;
+  // Whether a stage produced a value is a question about its type, not the text
+  // it compiled to. A vertex shader returning zero or returning nothing both
+  // fail the same check.
+  throw new Error(
+    `[RMSL] A vertex shader has to produce a position. This one `
+    + (lastType === undefined || lastType === "void"
+      ? `returns nothing and never assigns builtinPosition(). Return a vec4, or `
+        + `assign builtinPosition() yourself.`
+      : `returns ${lastType}, which cannot become one. Wrap it — for example `
+        + `vec4(value, 1.0).`),
+  );
+}
+
+/** Which component each accessor letter names, in both spellings. */
+const COMPONENT_INDEX: Record<string, number> = {
+  x: 0, y: 1, z: 2, w: 3,
+  r: 0, g: 1, b: 2, a: 3,
+};
+
+/**
+ * Resolve a chain of swizzles down to the variable underneath it.
+ *
+ * Only a variable can be assigned to. `a.xyz` is a value, so `a.xyz.xy = e`
+ * has to become a write to `a` — and which components of `a` that is takes
+ * composing the patterns: the outer pattern indexes into the inner one, so
+ * `a.yzw.xy` selects the first two of y, z, w, which is `a.yz`.
+ */
+function resolveSwizzleTarget(
+  target: any,
+): { base: BaseNode<ShaderType>; pattern: string } {
+  let pattern = target.value as string;
+  let base = target.params![0];
+  while (base?.type === "swizzle") {
+    let inner = base.value as string;
+    pattern = [...pattern].map(c => inner[COMPONENT_INDEX[c]]).join("");
+    base = base.params![0];
+  }
+  return { base, pattern };
+}
+
+/**
+ * Only a square matrix has an inverse, and neither language offers an overload
+ * for the rest. Asked in both backends, so the two cannot come to different
+ * answers about the same program — one emitting a call no driver accepts while
+ * the other refuses it.
+ *
+ * Returns the matrix's size, which the WGSL side needs to pick its helper.
+ */
+function assertSquareMatrix(operandType: string | undefined): number {
+  let shape = MATRIX_DIMENSIONS[operandType as string];
+  if (shape === undefined || shape[0] !== shape[1]) {
+    throw new Error(
+      `[RMSL] inverse() needs a square matrix, but this one is `
+      + `${operandType ?? "untyped"}.`,
+    );
+  }
+  return shape[0];
+}
+
+/**
+ * The position is the vertex stage's output. A fragment stage cannot read it:
+ * GLSL's gl_Position is write-only there and WGSL has no such value at all.
+ * Emitting it anyway produced an identifier neither backend declares.
+ */
+function assertPositionIsReadable(ctx: CompileCtx): void {
+  if (ctx.shaderStage === "vertex") return;
+  throw new Error(
+    "[RMSL] builtinPosition() is the vertex stage's output position, and a "
+    + "fragment stage cannot read it. Pass the value you need through a "
+    + "varying() instead.",
+  );
+}
+
 function compileGLSLStage(
   node: BaseNode<ShaderType> | ShaderType extends never ? never : any,
   ctx: CompileCtx,
-): { decls: string[]; body: string[]; expr: string } {
+): CompiledNode {
   if (node === undefined || node === null) {
     return { decls: [], body: [], expr: "0.0" };
   }
@@ -953,6 +1440,21 @@ function compileGLSLStage(
     return { decls: [], body: [], expr: `vec3(${node.join(", ")})` };
   }
 
+  // Reached before: its statements are already in the output, so only the
+  // expression naming the result is handed back. Emitting them again would
+  // redeclare a variable, or run an assignment or a loop a second time.
+  let seen = ctx.memo.get(node);
+  if (seen) return { decls: [], body: [], expr: seen.expr };
+
+  let result = compileGLSLNode(node, ctx);
+  ctx.memo.set(node, result);
+  return result;
+}
+
+function compileGLSLNode(
+  node: BaseNode<ShaderType> | ShaderType extends never ? never : any,
+  ctx: CompileCtx,
+): CompiledNode {
   // Constant folding
   let folded = tryFold(node);
   if (folded) node = folded;
@@ -1008,6 +1510,35 @@ function compileGLSLStage(
       return { decls: [], body: [], expr: v.slot };
     }
 
+    case "uniformArray": {
+      // Registered on first reference like any uniform; `length` makes the
+      // declaration `uniform vec4 name[24];` rather than a single value.
+      let v = node.value as any;
+      if (!ctx.uniforms.has(v.id)) {
+        ctx.uniforms.set(v.id, {
+          type: glslType(v.shaderType),
+          slot: v.slot,
+          length: v.length,
+        });
+      }
+      return { decls: [], body: [], expr: v.slot };
+    }
+
+    case "uniformArrayElement": {
+      let arr = compileGLSLStage(node.params![0], ctx);
+      let index = compileGLSLStage(node.params![1], ctx);
+      // GLSL indexes with an int; a float loop counter has to be converted.
+      let indexType = (node.params![1] as any)?._t;
+      let indexExpr = indexType === "int" || indexType === "uint"
+        ? index.expr
+        : `int(${index.expr})`;
+      return {
+        decls: [...arr.decls, ...index.decls],
+        body: [...arr.body, ...index.body],
+        expr: `${arr.expr}[${indexExpr}]`,
+      };
+    }
+
     case "attribute": {
       let v = node.value as any;
       if (!ctx.attributes.has(v.id)) {
@@ -1033,6 +1564,7 @@ function compileGLSLStage(
     }
 
     case "builtinPosition": {
+      assertPositionIsReadable(ctx);
       return { decls: [], body: [], expr: "gl_Position" };
     }
 
@@ -1055,7 +1587,24 @@ function compileGLSLStage(
     }
     case "not": {
       let a = compileGLSLStage(node.params![0], ctx);
-      return { decls: a.decls, body: a.body, expr: `(!${a.expr})` };
+      // GLSL's `!` takes a bool only; boolean vectors go through not().
+      let operandType = (node.params![0] as any)?._t;
+      let isBoolVector = operandType === "bvec2" || operandType === "bvec3" || operandType === "bvec4";
+      return {
+        decls: a.decls,
+        body: a.body,
+        expr: isBoolVector ? `not(${a.expr})` : `(!${a.expr})`,
+      };
+    }
+
+    case "all": {
+      let a = compileGLSLStage(node.params![0], ctx);
+      return { decls: a.decls, body: a.body, expr: `all(${a.expr})` };
+    }
+
+    case "any": {
+      let a = compileGLSLStage(node.params![0], ctx);
+      return { decls: a.decls, body: a.body, expr: `any(${a.expr})` };
     }
 
     // Binary math ops (same pattern for all)
@@ -1063,7 +1612,14 @@ function compileGLSLStage(
     case "sub": return binaryGLSL(node, ctx, "-");
     case "mult": return binaryGLSL(node, ctx, "*");
     case "div": return binaryGLSL(node, ctx, "/");
-    case "mod": return binaryGLSL(node, ctx, "%");
+    case "mod": {
+      // GLSL's % is integer-only; floats need the mod() builtin.
+      let operandType = (node.params![0] as any)?._t;
+      let isInteger = operandType === "int" || operandType === "uint";
+      return isInteger
+        ? binaryGLSL(node, ctx, "%")
+        : binaryGLSL(node, ctx, "mod", true);
+    }
     case "pow": return binaryGLSL(node, ctx, "pow", true);
     case "min": return binaryGLSL(node, ctx, "min", true);
     case "max": return binaryGLSL(node, ctx, "max", true);
@@ -1071,7 +1627,7 @@ function compileGLSLStage(
     case "cross": return binaryGLSL(node, ctx, "cross", true);
     case "distance": return binaryGLSL(node, ctx, "distance", true);
     case "reflect": return binaryGLSL(node, ctx, "reflect", true);
-    case "refract": return binaryGLSL(node, ctx, "refract", true);
+    case "refract": return ternaryGLSL(node, ctx, "refract");
     case "mix": return ternaryGLSL(node, ctx, "mix");
     case "step": return binaryGLSL(node, ctx, "step", true);
     case "smoothstep": return ternaryGLSL(node, ctx, "smoothstep");
@@ -1132,7 +1688,9 @@ function compileGLSLStage(
     case "normalize": return unaryGLSL(node, ctx, "normalize");
     case "length": return unaryGLSL(node, ctx, "length");
     case "transpose": return unaryGLSL(node, ctx, "transpose");
-    case "inverse": return unaryGLSL(node, ctx, "inverse");
+    case "inverse":
+      assertSquareMatrix((node.params![0] as any)?._t);
+      return unaryGLSL(node, ctx, "inverse");
     case "fwidth": return unaryGLSL(node, ctx, "fwidth");
 
     case "matrixElement": {
@@ -1178,6 +1736,11 @@ function compileGLSLStage(
     }
 
     case "assign": {
+      // An explicit write to the position tells the stage check that the
+      // program has taken care of it.
+      if ((node.params![0] as any)?.type === "builtinPosition") {
+        ctx.positionWritten = true;
+      }
       let lhs = compileGLSLStage(node.params![0], ctx);
       let rhs = compileGLSLStage(node.params![1], ctx);
       return {
@@ -1244,7 +1807,7 @@ function compileGLSLStage(
         body: [
           ...initBody,
           ...cond.body,
-          `for (${initExpr}; ${cond.expr}; ${update.expr}) {`,
+          `for (${initExpr}; ${cond.expr}; ${forUpdateStatements(update).map(withoutSemicolon).join(", ")}) {`,
           ...body.body.map(l => "  " + l),
           "}",
         ],
@@ -1280,8 +1843,11 @@ function compileGLSLStage(
     }
 
     default:
-      console.warn(`[RMSL] Unsupported node type in GLSL compiler: "${node.type}"`);
-      return { decls: [], body: [], expr: "0.0" };
+      // Emitting a placeholder here would silently corrupt the shader: an
+      // unhandled node becomes the literal 0.0 and the program still "compiles".
+      // Every node type the public API can build has a case above, so reaching
+      // this means the compiler lost one.
+      throw new Error(`[RMSL] Unsupported node type in GLSL compiler: "${node.type}"`);
   }
 }
 
@@ -1380,7 +1946,7 @@ function unaryGLSL(
 }
 
 function compileGLSLWithStage(
-  root: Node<ShaderType> | Node<ShaderType>[],
+  root: Node<ShaderType> | readonly Node<ShaderType>[],
   shaderStage: "vertex" | "fragment",
 ): string {
   let ctx: CompileCtx = {
@@ -1392,6 +1958,9 @@ function compileGLSLWithStage(
     outputs: new Map(),
     wgslSamplers: new Map(),
     varDefs: new Map(),
+    memo: new Map(),
+    wgslHelpers: new Set(),
+    positionWritten: false,
     inFn: false,
     fragDepthUsed: false,
   };
@@ -1400,10 +1969,26 @@ function compileGLSLWithStage(
   let results = nodes.map(n => compileGLSLStage(n, ctx));
   let allBody: string[] = [];
   let lastExpr = "0.0";
-  for (let r of results) {
-    allBody.push(...r.decls, ...r.body);
-    lastExpr = r.expr;
+  // The stage output is a fixed type (vec4 for gl_Position and the implicit
+  // fragment colour), so the final expression's type decides whether it can be
+  // assigned there at all. Emitting it unchecked produces shaders that do not
+  // compile — `gl_Position = <vec3>` and `result._rmsl_fragColor = <f32>`.
+  let lastType: string | undefined;
+  for (let i = 0; i < results.length; i++) {
+    allBody.push(...results[i].decls, ...results[i].body);
+    lastExpr = results[i].expr;
+    lastType = (nodes[i] as any)?._t;
   }
+  assertStageResult(shaderStage, lastType, ctx.positionWritten);
+  // A vec4-typed node always has a value, so its type alone settles this. An
+  // explicit write means the implicit one would be a second, conflicting
+  // assignment.
+  let hasVec4Result = lastType === "vec4" && !ctx.positionWritten;
+  // A fragment stage that declares no output of its own still has to put its
+  // colour somewhere, and GLSL ES 3.00 removed gl_FragColor, so an output is
+  // declared for it.
+  let emitImplicitColor =
+    shaderStage === "fragment" && ctx.outputs.size === 0 && hasVec4Result;
 
   let lines: string[] = [];
   lines.push("#version 300 es");
@@ -1411,7 +1996,11 @@ function compileGLSLWithStage(
   lines.push("");
 
   ctx.uniforms.forEach((info) => {
-    lines.push(`uniform ${info.type} ${info.slot};`);
+    lines.push(
+      info.length !== undefined
+        ? `uniform ${info.type} ${info.slot}[${info.length}];`
+        : `uniform ${info.type} ${info.slot};`,
+    );
   });
   ctx.attributes.forEach((info) => {
     lines.push(`in ${info.type} ${info.slot};`);
@@ -1423,12 +2012,25 @@ function compileGLSLWithStage(
       lines.push(`in ${info.type} ${info.slot};`);
     }
   });
+  // Numbered per shader, not from the id the output was declared with.
+  let outputLocation = 0;
   ctx.outputs.forEach((info) => {
-    if (info && info.location != null && info.slot && info.type) {
-      lines.push(`layout(location=${info.location}) out ${info.type} ${info.slot};`);
+    if (info && info.slot && info.type) {
+      // The qualifier names a draw buffer, which only a fragment stage has.
+      // GLSL ES 3.00 rejects one on a vertex output, where the value is simply
+      // another thing passed on to the fragment stage.
+      lines.push(shaderStage === "fragment"
+        ? `layout(location=${outputLocation++}) out ${info.type} ${info.slot};`
+        : `out ${info.type} ${info.slot};`);
     }
   });
-  if (ctx.uniforms.size > 0 || ctx.attributes.size > 0 || ctx.outputs.size > 0) {
+  if (emitImplicitColor) {
+    lines.push("layout(location=0) out vec4 _rmsl_fragColor;");
+  }
+  if (
+    ctx.uniforms.size > 0 || ctx.attributes.size > 0 || ctx.outputs.size > 0
+    || emitImplicitColor
+  ) {
     lines.push("");
   }
 
@@ -1437,7 +2039,7 @@ function compileGLSLWithStage(
     for (let line of allBody) {
       lines.push("  " + line);
     }
-    if (lastExpr !== "0.0") {
+    if (hasVec4Result) {
       lines.push(`  gl_Position = ${lastExpr};`);
     }
     lines.push("}");
@@ -1446,27 +2048,51 @@ function compileGLSLWithStage(
     for (let line of allBody) {
       lines.push("  " + line);
     }
-    if (ctx.outputs.size > 0) {
-      ctx.outputs.forEach((info) => {
-        if (info && info.slot && info.type) {
-          lines.push(`  ${info.slot} = ${lastExpr};`);
-        }
-      });
+    // Only the implicit output is written from the stage result. A declared
+    // output belongs to the program, which assigns it itself — writing the
+    // trailing expression into every declared slot ignored its type and
+    // overwrote whatever the program had already put there.
+    if (emitImplicitColor) {
+      lines.push(`  _rmsl_fragColor = ${lastExpr};`);
     }
     lines.push("}");
   }
   return lines.join("\n");
 }
 
+/**
+ * What a vertex stage may be handed.
+ *
+ * Its result becomes the position, so a vec4 is the ordinary case, and anything
+ * else is refused here rather than at run time.
+ *
+ * Void is the other way to satisfy a vertex stage: assign builtinPosition()
+ * yourself and return nothing. A function whose body returns nothing has that
+ * type, so the two cases are exactly the two the signature admits. Whether an
+ * assignment actually happened is not something a signature can see, so that
+ * half stays a run-time check.
+ *
+ * Several values may be returned at once, of which the last becomes the
+ * position — so that is the one constrained, and the values before it are
+ * whatever the shader needed on the way there. Saying so requires knowing which
+ * value is last, which is why `Fn` infers an array return as a tuple.
+ */
+export type VertexRoot =
+  | Node<"vec4">
+  | readonly [...Node<ShaderType>[], Node<"vec4">]
+  | void;
+
 export const compileGLSL: {
-  (root: Node<ShaderType> | Node<ShaderType>[]): string;
-  vertex(root: Node<ShaderType> | Node<ShaderType>[]): string;
-  fragment(root: Node<ShaderType> | Node<ShaderType>[]): string;
+  (root: Node<ShaderType> | readonly Node<ShaderType>[]): string;
+  vertex(root: VertexRoot): string;
+  fragment(root: Node<ShaderType> | readonly Node<ShaderType>[]): string;
 } = Object.assign(
-  (root: Node<ShaderType> | Node<ShaderType>[]) => compileGLSLWithStage(root, "fragment"),
+  (root: Node<ShaderType> | readonly Node<ShaderType>[]) => compileGLSLWithStage(root, "fragment"),
   {
-    vertex: (root: Node<ShaderType> | Node<ShaderType>[]) => compileGLSLWithStage(root, "vertex"),
-    fragment: (root: Node<ShaderType> | Node<ShaderType>[]) => compileGLSLWithStage(root, "fragment"),
+    // The value is always a node; void only describes a body that returned
+    // nothing, which still compiles to one.
+    vertex: (root: VertexRoot) => compileGLSLWithStage(root as Node<ShaderType>, "vertex"),
+    fragment: (root: Node<ShaderType> | readonly Node<ShaderType>[]) => compileGLSLWithStage(root, "fragment"),
   },
 );
 
@@ -1474,12 +2100,228 @@ export const compileGLSL: {
 let typeToWGSL: Record<string, string> = {
   float: "f32", vec2: "vec2<f32>", vec3: "vec3<f32>", vec4: "vec4<f32>",
   int: "i32", uint: "u32", bool: "bool",
+  bvec2: "vec2<bool>", bvec3: "vec3<bool>", bvec4: "vec4<bool>",
   mat2: "mat2x2<f32>", mat2x3: "mat2x3<f32>", mat2x4: "mat2x4<f32>",
   mat3x2: "mat3x2<f32>", mat3: "mat3x3<f32>", mat3x4: "mat3x4<f32>",
   mat4x2: "mat4x2<f32>", mat4x3: "mat4x3<f32>", mat4: "mat4x4<f32>",
   sampler2D: "texture_2d<f32>", samplerCube: "texture_cube<f32>",
   void: "void",
 };
+
+/**
+ * `[columns, rows]` per matrix type. A GLSL/WGSL `matCxR` is C columns of R
+ * rows, and the square names are the C === R shorthand.
+ *
+ * Every matrix type is listed.
+ */
+const MATRIX_DIMENSIONS: Record<string, [number, number]> = {
+  mat2: [2, 2], mat2x3: [2, 3], mat2x4: [2, 4],
+  mat3x2: [3, 2], mat3: [3, 3], mat3x4: [3, 4],
+  mat4x2: [4, 2], mat4x3: [4, 3], mat4: [4, 4],
+};
+
+/**
+ * Expand a single-scalar matrix constructor for WGSL.
+ *
+ * GLSL reads `mat4(1.0)` as a diagonal — the identity scaled by the scalar.
+ * WGSL has no such overload and requires every component, so the one argument
+ * is written out as the full diagonal, column by column.
+ *
+ * Only a *scalar* argument means a diagonal. A lone matrix argument is a copy
+ * or truncation — `mat3(someMat4)` — which WGSL spells the same way GLSL does,
+ * so it passes through. Expanding it instead produced
+ * `mat3x3<f32>(m, 0f, 0f, 0f, m, ...)`, a constructor that does not exist.
+ */
+function wgslMatrixArgs(
+  type: string,
+  args: string[],
+  sourceType: string | undefined,
+): string[] {
+  let shape = MATRIX_DIMENSIONS[type];
+  if (shape === undefined || args.length !== 1) return args;
+  if (TYPE_WIDTH[sourceType as string] !== 1) return args;
+  let [columns, rows] = shape;
+  let scalar = args[0];
+  let out: string[] = [];
+  for (let col = 0; col < columns; col++) {
+    for (let row = 0; row < rows; row++) out.push(row === col ? scalar : "0f");
+  }
+  return out;
+}
+
+/** Struct type and binding name holding every uniform in a WGSL shader. */
+const WGSL_UNIFORM_STRUCT = "_RmslUniforms";
+const WGSL_UNIFORM_BINDING = "_rmsl_uniforms";
+
+/** Byte size and alignment of each WGSL type, per the spec's layout rules. */
+const WGSL_LAYOUT: Record<string, { size: number; align: number }> = {
+  f32: { size: 4, align: 4 },
+  i32: { size: 4, align: 4 },
+  u32: { size: 4, align: 4 },
+  "vec2<f32>": { size: 8, align: 8 },
+  "vec3<f32>": { size: 12, align: 16 },
+  "vec4<f32>": { size: 16, align: 16 },
+  // The carriers. A bool is not host-shareable, so it travels as an unsigned
+  // integer of the same width, and a narrow array element travels widened —
+  // both of which arrive here as the type they are stored as.
+  "vec2<u32>": { size: 8, align: 8 },
+  "vec3<u32>": { size: 12, align: 16 },
+  "vec4<u32>": { size: 16, align: 16 },
+  "vec2<i32>": { size: 8, align: 8 },
+  "vec3<i32>": { size: 12, align: 16 },
+  "vec4<i32>": { size: 16, align: 16 },
+  // A matCxR is C columns of vecR, and each column takes a whole multiple of
+  // its own alignment — so a column of three floats occupies sixteen bytes,
+  // not twelve.
+  "mat2x2<f32>": { size: 16, align: 8 },
+  "mat2x3<f32>": { size: 32, align: 16 },
+  "mat2x4<f32>": { size: 32, align: 16 },
+  "mat3x2<f32>": { size: 24, align: 8 },
+  "mat3x3<f32>": { size: 48, align: 16 },
+  "mat3x4<f32>": { size: 48, align: 16 },
+  "mat4x2<f32>": { size: 32, align: 8 },
+  "mat4x3<f32>": { size: 64, align: 16 },
+  "mat4x4<f32>": { size: 64, align: 16 },
+};
+
+export interface WgslUniformMember {
+  /** Generated slot name, matching the `name` on the uniform node. */
+  name: string;
+  /** Element type. For an array this is the element's type, not the array's. */
+  type: string;
+  /** Byte offset within the uniform buffer. */
+  offset: number;
+  /** Bytes occupied in total, so an array's whole extent rather than one element. */
+  size: number;
+  /** Element count, present only for a uniform array. */
+  length?: number;
+  /**
+   * Bytes between consecutive elements, present only for a uniform array.
+   *
+   * Not the same as the element size: WGSL rounds the stride of an array in
+   * the uniform address space up to 16, so `array<f32, 4>` spans 64 bytes with
+   * each element alone in its own slot.
+   */
+  stride?: number;
+}
+
+/**
+ * Element types that cannot be array members in WGSL's uniform address space,
+ * and what to store instead.
+ *
+ * Elements there must be 16-byte aligned. Dawn accepts `array<vec3<f32>, N>`
+ * — a vec3 aligns to 16 even though it occupies 12 — but rejects anything
+ * narrower, so f32, i32, u32 and vec2 are widened to a four-component vector
+ * and the value read back out of its leading components.
+ *
+ * The same approach TSL takes, where it is called the padded type.
+ */
+const WGSL_ARRAY_PADDING: Record<
+  string,
+  { stored: string; read: (element: string) => string }
+> = {
+  f32: { stored: "vec4<f32>", read: e => `${e}.x` },
+  i32: { stored: "vec4<i32>", read: e => `${e}.x` },
+  u32: { stored: "vec4<u32>", read: e => `${e}.x` },
+  "vec2<f32>": { stored: "vec4<f32>", read: e => `${e}.xy` },
+  // A bool is not host-shareable at all, so it travels as an unsigned integer
+  // and is compared back, the same substitution a single bool uniform makes.
+  // Reading is a comparison rather than a suffix, which is why these are
+  // written as functions.
+  bool: { stored: "vec4<u32>", read: e => `(${e}.x != 0u)` },
+  "vec2<bool>": { stored: "vec4<u32>", read: e => `(${e}.xy != vec2<u32>(0u))` },
+  "vec3<bool>": { stored: "vec4<u32>", read: e => `(${e}.xyz != vec3<u32>(0u))` },
+  "vec4<bool>": { stored: "vec4<u32>", read: e => `(${e} != vec4<u32>(0u))` },
+};
+
+/** How a member is written in the struct: `array<T, N>` for arrays, else `T`. */
+function wgslMemberType(m: WgslUniformMember): string {
+  if (m.length === undefined) return m.type;
+  const stored = WGSL_ARRAY_PADDING[m.type]?.stored ?? m.type;
+  return `array<${stored}, ${m.length}>`;
+}
+
+/**
+ * Place uniforms in one struct and report where each lands.
+ *
+ * WGSL caps uniform *buffers* at 12 per stage — the spec minimum, and what
+ * real devices report — so a binding per uniform stops working at the
+ * thirteenth. One struct is one binding no matter how many members, which is
+ * how WebGPU code is written by hand.
+ *
+ * Members are ordered by descending alignment so the natural WGSL layout adds
+ * no padding between them, and the offsets are returned because a caller
+ * writing the buffer has no other way to know them.
+ */
+/**
+ * Whether a uniform is a texture, which cannot go in the uniform address space
+ * and keeps a binding of its own. Asked in both places that emit uniforms, so
+ * the two cannot disagree about it.
+ */
+function isWgslTexture(type: string): boolean {
+  return type === "texture_2d<f32>" || type === "texture_cube<f32>";
+}
+
+export function wgslUniformLayout(
+  members: { slot: string; type: string; length?: number }[],
+): { members: WgslUniformMember[]; size: number } {
+  // An array in the uniform address space has its element stride rounded up to
+  // 16, so `array<f32, 4>` occupies 64 bytes rather than 16 — each element sits
+  // in its own 16-byte slot. Callers writing the buffer need the stride, not
+  // just the element size.
+  const shapeOf = (m: { type: string; length?: number }) => {
+    // An element too narrow to align is stored widened, so its footprint
+    // follows what it is stored as rather than what it was declared as.
+    const stored = m.length === undefined
+      ? m.type
+      : WGSL_ARRAY_PADDING[m.type]?.stored ?? m.type;
+    const base = WGSL_LAYOUT[stored];
+    // Guessing here is the worst thing this function could do. A wrong size is
+    // not a shader that fails to build, it is one that reads whatever happens
+    // to lie at that address, and the caller has no way to notice.
+    if (base === undefined) {
+      throw new Error(
+        `[RMSL] no uniform layout is known for ${m.type}. Its size and`
+        + ` alignment have to be added to WGSL_LAYOUT before it can be packed`
+        + ` into a uniform buffer.`,
+      );
+    }
+    if (m.length === undefined) return { ...base, stride: base.size };
+    const stride = Math.ceil(base.size / 16) * 16;
+    return { size: stride * m.length, align: Math.max(base.align, 16), stride };
+  };
+
+  // Widest alignment first, so the gaps between members stay small. Members
+  // that align the same keep the order they were declared in.
+  const ordered = members
+    .map((m, declaredAt) => ({ m, declaredAt }))
+    .sort((a, b) => {
+      const byAlign = shapeOf(b.m).align - shapeOf(a.m).align;
+      return byAlign !== 0 ? byAlign : a.declaredAt - b.declaredAt;
+    })
+    .map(({ m }) => m);
+
+  const out: WgslUniformMember[] = [];
+  let offset = 0;
+  for (const m of ordered) {
+    const { size, align, stride } = shapeOf(m);
+    offset = Math.ceil(offset / align) * align;
+    out.push({
+      name: m.slot,
+      type: m.type,
+      offset,
+      size,
+      ...(m.length !== undefined ? { length: m.length, stride } : {}),
+    });
+    offset += size;
+  }
+  // A uniform struct is itself aligned to its largest member, and an array
+  // member aligns to sixteen whatever it holds — so this has to ask for the
+  // member's real alignment rather than its element type's, or the struct comes
+  // out shorter than the buffer the shader reads.
+  const structAlign = ordered.reduce((a, m) => Math.max(a, shapeOf(m).align), 4);
+  return { members: out, size: Math.ceil(offset / structAlign) * structAlign };
+}
 
 function wgslType(brand: any): string {
   return typeToWGSL[brand as string] ?? "f32";
@@ -1488,7 +2330,7 @@ function wgslType(brand: any): string {
 function compileWGSLStage(
   node: BaseNode<ShaderType> | any,
   ctx: CompileCtx,
-): { decls: string[]; body: string[]; expr: string } {
+): CompiledNode {
   if (node === undefined || node === null) {
     return { decls: [], body: [], expr: "0.0" };
   }
@@ -1502,6 +2344,21 @@ function compileWGSLStage(
     return { decls: [], body: [], expr: `vec3<f32>(${node.join(", ")})` };
   }
 
+  // Reached before: its statements are already in the output, so only the
+  // expression naming the result is handed back. Emitting them again would
+  // redeclare a variable, or run an assignment or a loop a second time.
+  let seen = ctx.memo.get(node);
+  if (seen) return { decls: [], body: [], expr: seen.expr };
+
+  let result = compileWGSLNode(node, ctx);
+  ctx.memo.set(node, result);
+  return result;
+}
+
+function compileWGSLNode(
+  node: BaseNode<ShaderType> | any,
+  ctx: CompileCtx,
+): CompiledNode {
   // Constant folding
   let folded = tryFold(node);
   if (folded) node = folded;
@@ -1528,7 +2385,28 @@ function compileWGSLStage(
     case "construct": {
       let params = (node.params ?? []).map((p: any) => compileWGSLStage(p, ctx));
       let t = wgslType(node._t as string);
-      let args = params.map((p: any) => p.expr).join(", ");
+
+      // GLSL truncates with vec3(someVec4); WGSL has no narrowing constructor,
+      // so the components are selected explicitly.
+      let target = TYPE_WIDTH[node._t as string];
+      let sourceType = (node.params?.[0] as any)?._t;
+      let source = TYPE_WIDTH[sourceType];
+      if (
+        params.length === 1 && target !== undefined && source !== undefined
+        && source > target && target > 1 && sourceType?.startsWith("vec")
+      ) {
+        return {
+          decls: params[0].decls,
+          body: params[0].body,
+          expr: `${params[0].expr}.${"xyzw".slice(0, target)}`,
+        };
+      }
+
+      let args = wgslMatrixArgs(
+        node._t as string,
+        params.map((p: any) => p.expr),
+        sourceType,
+      ).join(", ");
       return {
         decls: params.flatMap((p: any) => p.decls),
         body: params.flatMap((p: any) => p.body),
@@ -1547,10 +2425,65 @@ function compileWGSLStage(
 
     case "uniform": {
       let v = node.value as any;
+      // WGSL restricts the uniform address space to host-shareable types, and
+      // neither bool nor a boolean vector is one. GLSL allows both, so they are
+      // carried as unsigned integers and compared back on read — the difference
+      // stays inside the compiler. The comparison is component-wise for a
+      // vector, so it gives back a boolean vector of the same width.
+      let width = TYPE_WIDTH[v?.shaderType] ?? 1;
+      let isBoolean = v?.shaderType === "bool" || v?.shaderType?.startsWith("bvec");
+      let carrier = width === 1 ? "u32" : `vec${width}<u32>`;
+      let zero = width === 1 ? "0u" : `${carrier}(0u)`;
       if (v && v.id != null && !ctx.uniforms.has(v.id)) {
-        ctx.uniforms.set(v.id, { type: wgslType(v.shaderType), slot: v.slot });
+        ctx.uniforms.set(v.id, {
+          type: isBoolean ? carrier : wgslType(v.shaderType),
+          slot: v.slot,
+        });
       }
-      return { decls: [], body: [], expr: v?.slot || "uniform<f32>" };
+      if (!v?.slot) return { decls: [], body: [], expr: "uniform<f32>" };
+      // Value uniforms are members of one struct rather than a binding each, so
+      // their references are qualified. Textures keep a binding of their own —
+      // they cannot live in the uniform address space — and stay unqualified.
+      let isTexture = v.shaderType === "sampler2D" || v.shaderType === "samplerCube";
+      let ref = isTexture ? v.slot : `${WGSL_UNIFORM_BINDING}.${v.slot}`;
+      return {
+        decls: [],
+        body: [],
+        expr: isBoolean ? `(${ref} != ${zero})` : ref,
+      };
+    }
+
+    case "uniformArray": {
+      let v = node.value as any;
+      if (v && v.id != null && !ctx.uniforms.has(v.id)) {
+        ctx.uniforms.set(v.id, {
+          type: wgslType(v.shaderType),
+          slot: v.slot,
+          length: v.length,
+        });
+      }
+      return { decls: [], body: [], expr: `${WGSL_UNIFORM_BINDING}.${v.slot}` };
+    }
+
+    case "uniformArrayElement": {
+      let arr = compileWGSLStage(node.params![0], ctx);
+      let index = compileWGSLStage(node.params![1], ctx);
+      // WGSL indexes with i32 or u32; a float loop counter has to be converted.
+      let indexType = (node.params![1] as any)?._t;
+      let indexExpr = indexType === "int" || indexType === "uint"
+        ? index.expr
+        : `i32(${index.expr})`;
+      // An element too narrow to align is stored widened, so the value is read
+      // back out of the leading components — the padding never reaches the
+      // caller, who asked for a float and gets a float.
+      let elementType = wgslType((node.params![0] as any)?._t);
+      let element = `${arr.expr}[${indexExpr}]`;
+      let read = WGSL_ARRAY_PADDING[elementType]?.read;
+      return {
+        decls: [...arr.decls, ...index.decls],
+        body: [...arr.body, ...index.body],
+        expr: read ? read(element) : element,
+      };
     }
 
     case "attribute": {
@@ -1580,7 +2513,10 @@ function compileWGSLStage(
     }
 
     case "builtinPosition": {
-      return { decls: [], body: [], expr: "position" };
+      // WGSL has no free-standing `position`; in a vertex stage it is a member
+      // of the output struct.
+      assertPositionIsReadable(ctx);
+      return { decls: [], body: [], expr: "result.position" };
     }
 
     case "builtinFragDepth": {
@@ -1602,15 +2538,43 @@ function compileWGSLStage(
       return { decls: a.decls, body: a.body, expr: `(-${a.expr})` };
     }
     case "not": {
+      // Unlike GLSL, WGSL's `!` is defined for vecN<bool> too.
       let a = compileWGSLStage(node.params![0], ctx);
       return { decls: a.decls, body: a.body, expr: `(!${a.expr})` };
+    }
+
+    case "all": {
+      let a = compileWGSLStage(node.params![0], ctx);
+      return { decls: a.decls, body: a.body, expr: `all(${a.expr})` };
+    }
+
+    case "any": {
+      let a = compileWGSLStage(node.params![0], ctx);
+      return { decls: a.decls, body: a.body, expr: `any(${a.expr})` };
     }
 
     case "add": return binaryWGSL(node, ctx, "+");
     case "sub": return binaryWGSL(node, ctx, "-");
     case "mult": return binaryWGSL(node, ctx, "*");
     case "div": return binaryWGSL(node, ctx, "/");
-    case "mod": return binaryWGSL(node, ctx, "%");
+    case "mod": {
+      let operandType = (node.params![0] as any)?._t;
+      if (operandType === "int" || operandType === "uint") {
+        return binaryWGSL(node, ctx, "%");
+      }
+      // WGSL's % truncates toward zero, GLSL's mod() floors, and floored is
+      // what this operation is named for — the result takes the sign of the
+      // divisor. A helper carries that, rather than the subtraction being
+      // written inline: inline repeats both operands twice each, so an
+      // expensive operand is evaluated four times. A call is an ordinary
+      // expression, so it still fits wherever the operator did.
+      let helper = `_rmsl_mod_${operandType}`;
+      if (helper in WGSL_HELPERS) {
+        ctx.wgslHelpers.add(helper);
+        return binaryWGSL(node, ctx, helper, true);
+      }
+      return binaryWGSL(node, ctx, "%");
+    }
     case "pow": return binaryWGSL(node, ctx, "pow", true);
     case "min": return binaryWGSL(node, ctx, "min", true);
     case "max": return binaryWGSL(node, ctx, "max", true);
@@ -1618,7 +2582,7 @@ function compileWGSLStage(
     case "cross": return binaryWGSL(node, ctx, "cross", true);
     case "distance": return binaryWGSL(node, ctx, "distance", true);
     case "reflect": return binaryWGSL(node, ctx, "reflect", true);
-    case "refract": return binaryWGSL(node, ctx, "refract", true);
+    case "refract": return ternaryWGSL(node, ctx, "refract");
     case "mix": return ternaryWGSL(node, ctx, "mix");
     case "step": return binaryWGSL(node, ctx, "step", true);
     case "smoothstep": return ternaryWGSL(node, ctx, "smoothstep");
@@ -1636,8 +2600,10 @@ function compileWGSLStage(
     case "bitAnd": return binaryWGSL(node, ctx, "&");
     case "bitOr": return binaryWGSL(node, ctx, "|");
     case "bitXor": return binaryWGSL(node, ctx, "^");
-    case "shiftLeft": return binaryWGSL(node, ctx, "<<");
-    case "shiftRight": return binaryWGSL(node, ctx, ">>");
+    // WGSL takes the shift amount as u32 even when the value shifted is i32,
+    // so the right operand is converted. GLSL accepts either.
+    case "shiftLeft": return shiftWGSL(node, ctx, "<<");
+    case "shiftRight": return shiftWGSL(node, ctx, ">>");
 
     case "matVecMul": {
       let mat = compileWGSLStage(node.params![0], ctx);
@@ -1678,7 +2644,19 @@ function compileWGSLStage(
     case "normalize": return unaryWGSL(node, ctx, "normalize");
     case "length": return unaryWGSL(node, ctx, "length");
     case "transpose": return unaryWGSL(node, ctx, "transpose");
-    case "inverse": return unaryWGSL(node, ctx, "inverse");
+    case "inverse": {
+      // No inverse() builtin in WGSL, so one is written out per matrix size and
+      // pulled in on demand.
+      let operand = compileWGSLStage(node.params![0], ctx);
+      let size = assertSquareMatrix((node.params![0] as any)?._t);
+      let helper = `_rmsl_inverse${size}`;
+      ctx.wgslHelpers.add(helper);
+      return {
+        decls: operand.decls,
+        body: operand.body,
+        expr: `${helper}(${operand.expr})`,
+      };
+    }
     case "fwidth": return unaryWGSL(node, ctx, "fwidth");
 
     case "matrixElement": {
@@ -1738,8 +2716,60 @@ function compileWGSLStage(
     }
 
     case "assign": {
-      let lhs = compileWGSLStage(node.params![0], ctx);
+      // An explicit write to the position tells the stage check that the
+      // program has taken care of it.
+      if ((node.params![0] as any)?.type === "builtinPosition") {
+        ctx.positionWritten = true;
+      }
       let rhs = compileWGSLStage(node.params![1], ctx);
+
+      // WGSL only makes a single component assignable: `v.x = e` is a
+      // reference, but a multi-component swizzle like `v.xy` is a value, so
+      // `v.xy = e` is rejected. GLSL allows it, so the write is split into one
+      // assignment per component. The right-hand side is bound to a temporary
+      // first, otherwise an expression with side effects would run once per
+      // component.
+      let target = node.params![0] as any;
+
+      // The swizzle itself is never compiled here — it would emit the very
+      // `v.xy` form WGSL rejects, and any statements it produced would be
+      // dropped along with it. The chain is resolved to the variable
+      // underneath it, and the base compiled instead.
+      if (target?.type === "swizzle") {
+        let resolved = resolveSwizzleTarget(target);
+        let base = compileWGSLStage(resolved.base, ctx);
+
+        // A single component is directly assignable, so it needs no splitting.
+        if (resolved.pattern.length === 1) {
+          return {
+            decls: [...base.decls, ...rhs.decls],
+            body: [
+              ...base.body,
+              ...rhs.body,
+              `${base.expr}.${resolved.pattern} = ${rhs.expr};`,
+            ],
+            expr: base.expr,
+          };
+        }
+
+        let temp = `_rmsl_sw${ctx.nextId++}`;
+        let rhsType = wgslType((node.params![1] as any)?._t ?? "float");
+        let lines = [
+          ...base.body,
+          ...rhs.body,
+          `var ${temp}: ${rhsType} = ${rhs.expr};`,
+          ...[...resolved.pattern].map(
+            (component, i) => `${base.expr}.${component} = ${temp}[${i}];`,
+          ),
+        ];
+        return {
+          decls: [...base.decls, ...rhs.decls],
+          body: lines,
+          expr: base.expr,
+        };
+      }
+
+      let lhs = compileWGSLStage(node.params![0], ctx);
       return {
         decls: [...lhs.decls, ...rhs.decls],
         body: [...lhs.body, ...rhs.body, `${lhs.expr} = ${rhs.expr};`],
@@ -1801,11 +2831,40 @@ function compileWGSLStage(
           initBody = init.body.slice(0, -1);
         }
       }
+      let updates = forUpdateStatements(update);
+      let decls = [...init.decls, ...cd.decls, ...update.decls, ...body.decls];
+
+      // WGSL's for-header holds a single update statement. More than one goes
+      // in a continuing block instead, which runs after the body on every
+      // iteration — including after a continue, which appending them to the
+      // body would not.
+      if (updates.length > 1) {
+        return {
+          decls,
+          body: [
+            ...initBody,
+            "{",
+            `  ${initExpr};`,
+            "  loop {",
+            ...cd.body.map(l => "    " + l),
+            `    if (!(${cd.expr})) { break; }`,
+            ...body.body.map(l => "    " + l),
+            "    continuing {",
+            ...updates.map(l => "      " + l),
+            "    }",
+            "  }",
+            "}",
+          ],
+          expr: "0.0",
+        };
+      }
+
+      let header = updates.length === 1 ? withoutSemicolon(updates[0]) : "";
       return {
-        decls: [...init.decls, ...cd.decls, ...update.decls, ...body.decls],
+        decls,
         body: [
           ...initBody,
-          `for (${initExpr}; ${cd.expr}; ${update.expr}) {`,
+          `for (${initExpr}; ${cd.expr}; ${header}) {`,
           ...body.body.map(l => "  " + l),
           "}",
         ],
@@ -1841,9 +2900,118 @@ function compileWGSLStage(
     }
 
     default:
-      console.warn(`[RMSL] Unsupported node type in WGSL compiler: "${node.type}"`);
-      return { decls: [], body: [], expr: "0.0" };
+      // Emitting a placeholder here would silently corrupt the shader: an
+      // unhandled node becomes the literal 0.0 and the program still "compiles".
+      // Every node type the public API can build has a case above, so reaching
+      // this means the compiler lost one.
+      throw new Error(`[RMSL] Unsupported node type in WGSL compiler: "${node.type}"`);
   }
+}
+
+/**
+ * WGSL helper functions, emitted only when a shader uses them.
+ *
+ * GLSL has `inverse()` as a builtin and WGSL does not, so the matrix inverses
+ * are written out here — cofactor expansion over a column-major matrix, the
+ * same formulation as the mat4Inverse used on the JS side.
+ */
+const WGSL_HELPERS: Record<string, string> = {
+  // A floored modulus, which is what GLSL's mod() computes and what WGSL's %
+  // does not. One per width, because the operands are broadcast to match.
+  _rmsl_mod_float: `fn _rmsl_mod_float(x: f32, y: f32) -> f32 {
+  return x - y * floor(x / y);
+}`,
+  _rmsl_mod_vec2: `fn _rmsl_mod_vec2(x: vec2<f32>, y: vec2<f32>) -> vec2<f32> {
+  return x - y * floor(x / y);
+}`,
+  _rmsl_mod_vec3: `fn _rmsl_mod_vec3(x: vec3<f32>, y: vec3<f32>) -> vec3<f32> {
+  return x - y * floor(x / y);
+}`,
+  _rmsl_mod_vec4: `fn _rmsl_mod_vec4(x: vec4<f32>, y: vec4<f32>) -> vec4<f32> {
+  return x - y * floor(x / y);
+}`,
+  _rmsl_inverse2: `fn _rmsl_inverse2(m: mat2x2<f32>) -> mat2x2<f32> {
+  let det = m[0][0] * m[1][1] - m[0][1] * m[1][0];
+  let inv = 1.0 / det;
+  return mat2x2<f32>(
+    vec2<f32>(m[1][1] * inv, -m[0][1] * inv),
+    vec2<f32>(-m[1][0] * inv, m[0][0] * inv),
+  );
+}`,
+  _rmsl_inverse3: `fn _rmsl_inverse3(m: mat3x3<f32>) -> mat3x3<f32> {
+  let a00 = m[0][0]; let a01 = m[0][1]; let a02 = m[0][2];
+  let a10 = m[1][0]; let a11 = m[1][1]; let a12 = m[1][2];
+  let a20 = m[2][0]; let a21 = m[2][1]; let a22 = m[2][2];
+  let b01 = a22 * a11 - a12 * a21;
+  let b11 = -a22 * a10 + a12 * a20;
+  let b21 = a21 * a10 - a11 * a20;
+  let det = a00 * b01 + a01 * b11 + a02 * b21;
+  let inv = 1.0 / det;
+  return mat3x3<f32>(
+    vec3<f32>(b01 * inv, (-a22 * a01 + a02 * a21) * inv, (a12 * a01 - a02 * a11) * inv),
+    vec3<f32>(b11 * inv, (a22 * a00 - a02 * a20) * inv, (-a12 * a00 + a02 * a10) * inv),
+    vec3<f32>(b21 * inv, (-a21 * a00 + a01 * a20) * inv, (a11 * a00 - a01 * a10) * inv),
+  );
+}`,
+  _rmsl_inverse4: `fn _rmsl_inverse4(m: mat4x4<f32>) -> mat4x4<f32> {
+  let a00 = m[0][0]; let a01 = m[0][1]; let a02 = m[0][2]; let a03 = m[0][3];
+  let a10 = m[1][0]; let a11 = m[1][1]; let a12 = m[1][2]; let a13 = m[1][3];
+  let a20 = m[2][0]; let a21 = m[2][1]; let a22 = m[2][2]; let a23 = m[2][3];
+  let a30 = m[3][0]; let a31 = m[3][1]; let a32 = m[3][2]; let a33 = m[3][3];
+  let b00 = a00 * a11 - a01 * a10;
+  let b01 = a00 * a12 - a02 * a10;
+  let b02 = a00 * a13 - a03 * a10;
+  let b03 = a01 * a12 - a02 * a11;
+  let b04 = a01 * a13 - a03 * a11;
+  let b05 = a02 * a13 - a03 * a12;
+  let b06 = a20 * a31 - a21 * a30;
+  let b07 = a20 * a32 - a22 * a30;
+  let b08 = a20 * a33 - a23 * a30;
+  let b09 = a21 * a32 - a22 * a31;
+  let b10 = a21 * a33 - a23 * a31;
+  let b11 = a22 * a33 - a23 * a32;
+  let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+  let inv = 1.0 / det;
+  return mat4x4<f32>(
+    vec4<f32>((a11 * b11 - a12 * b10 + a13 * b09) * inv,
+              (-a01 * b11 + a02 * b10 - a03 * b09) * inv,
+              (a31 * b05 - a32 * b04 + a33 * b03) * inv,
+              (-a21 * b05 + a22 * b04 - a23 * b03) * inv),
+    vec4<f32>((-a10 * b11 + a12 * b08 - a13 * b07) * inv,
+              (a00 * b11 - a02 * b08 + a03 * b07) * inv,
+              (-a30 * b05 + a32 * b02 - a33 * b01) * inv,
+              (a20 * b05 - a22 * b02 + a23 * b01) * inv),
+    vec4<f32>((a10 * b10 - a11 * b08 + a13 * b06) * inv,
+              (-a00 * b10 + a01 * b08 - a03 * b06) * inv,
+              (a30 * b04 - a31 * b02 + a33 * b00) * inv,
+              (-a20 * b04 + a21 * b02 - a23 * b00) * inv),
+    vec4<f32>((-a10 * b09 + a11 * b07 - a12 * b06) * inv,
+              (a00 * b09 - a01 * b07 + a02 * b06) * inv,
+              (-a30 * b03 + a31 * b01 - a32 * b00) * inv,
+              (a20 * b03 - a21 * b01 + a22 * b00) * inv),
+  );
+}`,
+};
+
+/**
+ * A WGSL shift. The value keeps its own type, but the shift amount must be
+ * u32 — `i32 << i32` has no overload — so the right operand is converted when
+ * it is not already unsigned.
+ */
+function shiftWGSL(
+  node: BaseNode<ShaderType>,
+  ctx: CompileCtx,
+  op: string,
+): { decls: string[]; body: string[]; expr: string } {
+  let lhs = compileWGSLStage(node.params![0], ctx);
+  let rhs = compileWGSLStage(node.params![1], ctx);
+  let amountType = (node.params![1] as any)?._t;
+  let amount = amountType === "uint" ? rhs.expr : `u32(${rhs.expr})`;
+  return {
+    decls: [...lhs.decls, ...rhs.decls],
+    body: [...lhs.body, ...rhs.body],
+    expr: `(${lhs.expr} ${op} ${amount})`,
+  };
 }
 
 function binaryWGSL(
@@ -1914,7 +3082,7 @@ function unaryWGSL(
 }
 
 function compileWGSLWithStage(
-  root: Node<ShaderType> | Node<ShaderType>[],
+  root: Node<ShaderType> | readonly Node<ShaderType>[],
   shaderStage: "vertex" | "fragment",
 ): string {
   let ctx: CompileCtx = {
@@ -1926,6 +3094,9 @@ function compileWGSLWithStage(
     outputs: new Map(),
     wgslSamplers: new Map(),
     varDefs: new Map(),
+    memo: new Map(),
+    wgslHelpers: new Set(),
+    positionWritten: false,
     inFn: false,
     fragDepthUsed: false,
   };
@@ -1934,28 +3105,55 @@ function compileWGSLWithStage(
   let results = nodes.map(n => compileWGSLStage(n, ctx));
   let allBody: string[] = [];
   let lastExpr = "0.0";
-  for (let r of results) {
-    allBody.push(...r.decls, ...r.body);
-    lastExpr = r.expr;
+  // The stage output is a fixed type (vec4 for gl_Position and the implicit
+  // fragment colour), so the final expression's type decides whether it can be
+  // assigned there at all. Emitting it unchecked produces shaders that do not
+  // compile — `gl_Position = <vec3>` and `result._rmsl_fragColor = <f32>`.
+  let lastType: string | undefined;
+  for (let i = 0; i < results.length; i++) {
+    allBody.push(...results[i].decls, ...results[i].body);
+    lastExpr = results[i].expr;
+    lastType = (nodes[i] as any)?._t;
   }
+  assertStageResult(shaderStage, lastType, ctx.positionWritten);
+  // A vec4-typed node always has a value, so its type alone settles this. An
+  // explicit write means the implicit one would be a second, conflicting
+  // assignment.
+  let hasVec4Result = lastType === "vec4" && !ctx.positionWritten;
 
   let lines: string[] = [];
-  let ubBinding = 0;
   let texBinding = 0;
   let samplerBinding = 0;
   let sortedUniforms = [...ctx.uniforms.entries()].sort((a, b) => a[1].slot.localeCompare(b[1].slot));
-  for (let [, info] of sortedUniforms) {
-    if (info.type === "texture_2d<f32>" || info.type === "texture_cube<f32>") {
-      lines.push(`@group(1) @binding(${texBinding++}) var ${info.slot}: ${info.type};`);
-    } else {
-      lines.push(`@group(0) @binding(${ubBinding++}) var<uniform> ${info.slot}: ${info.type};`);
-    }
+
+  // Textures keep their own bindings; everything else goes in one struct,
+  // because WGSL allows only 12 uniform buffers per stage.
+  let textures = sortedUniforms.filter(([, i]) => isWgslTexture(i.type));
+  let plain = sortedUniforms.filter(([, i]) => !isWgslTexture(i.type));
+
+  for (let [, info] of textures) {
+    lines.push(`@group(1) @binding(${texBinding++}) var ${info.slot}: ${info.type};`);
+  }
+  if (plain.length > 0) {
+    let layout = wgslUniformLayout(
+      plain.map(([, i]) => ({ slot: i.slot, type: i.type, length: i.length })),
+    );
+    lines.push(`struct ${WGSL_UNIFORM_STRUCT} {`);
+    for (let m of layout.members) lines.push(`  ${m.name}: ${wgslMemberType(m)},`);
+    lines.push("};");
+    lines.push(`@group(0) @binding(0) var<uniform> ${WGSL_UNIFORM_BINDING}: ${WGSL_UNIFORM_STRUCT};`);
   }
   ctx.wgslSamplers.forEach((info) => {
     lines.push(`@group(2) @binding(${samplerBinding++}) var ${info.samplerSlot}: sampler;`);
   });
   if (ctx.uniforms.size > 0 || ctx.wgslSamplers.size > 0 || ctx.outputs.size > 0) {
     lines.push("");
+  }
+
+  // Helpers standing in for GLSL builtins WGSL lacks. Sorted so identical
+  // shaders produce identical source regardless of the order ops were reached.
+  for (const helper of [...ctx.wgslHelpers].sort()) {
+    lines.push(WGSL_HELPERS[helper], "");
   }
 
   if (shaderStage === "vertex") {
@@ -1970,14 +3168,17 @@ function compileWGSLWithStage(
     }
     lines.push("struct VertexOutput {");
     lines.push("  @builtin(position) position: vec4<f32>,");
-    let varyingLoc = 0;
+    // Everything the stage passes on shares one set of slots, because they all
+    // become members of this one structure. Numbering varyings and declared
+    // outputs separately handed the same slot to one of each.
+    let outgoingLocation = 0;
     let sortedVaryings = [...ctx.varyings.entries()].sort((a, b) => a[1].slot.localeCompare(b[1].slot));
     for (let [, info] of sortedVaryings) {
-      lines.push(`  @location(${varyingLoc++}) ${info.slot}: ${info.type},`);
+      lines.push(`  @location(${outgoingLocation++}) ${info.slot}: ${info.type},`);
     }
     ctx.outputs.forEach((info) => {
-      if (info && info.location != null && info.slot && info.type) {
-        lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
+      if (info && info.slot && info.type) {
+        lines.push(`  @location(${outgoingLocation++}) ${info.slot}: ${info.type},`);
       }
     });
     lines.push("};");
@@ -1992,26 +3193,39 @@ function compileWGSLWithStage(
     for (let line of allBody) {
       lines.push("  " + line);
     }
-    if (lastExpr !== "0.0") {
+    if (hasVec4Result) {
       lines.push(`  result.position = ${lastExpr};`);
     }
     lines.push("  return result;");
     lines.push("}");
   } else {
-    lines.push("struct FragmentOutput {");
-    ctx.outputs.forEach((info) => {
-      if (info && info.location != null && info.slot && info.type) {
-        lines.push(`  @location(${info.location}) ${info.slot}: ${info.type},`);
+    // A fragment stage only gets a return struct when it has something to put
+    // in it. WGSL forbids empty structs, so a shader with no declared output
+    // and a non-vec4 result becomes a plain `@fragment fn main()` that returns
+    // nothing — the WGSL equivalent of the GLSL branch emitting no assignment.
+    let emitImplicitColor = ctx.outputs.size === 0 && hasVec4Result;
+    let hasFragmentOutput = ctx.outputs.size > 0 || emitImplicitColor || ctx.fragDepthUsed;
+
+    if (hasFragmentOutput) {
+      lines.push("struct FragmentOutput {");
+      // Numbered per shader. The implicit colour below takes location 0, and
+      // only exists when there are no declared outputs, so the two cannot clash.
+      let fragmentOutputLocation = 0;
+      ctx.outputs.forEach((info) => {
+        if (info && info.slot && info.type) {
+          lines.push(`  @location(${fragmentOutputLocation++}) ${info.slot}: ${info.type},`);
+        }
+      });
+      if (emitImplicitColor) {
+        lines.push("  @location(0) _rmsl_fragColor: vec4<f32>,");
       }
-    });
-    if (ctx.outputs.size === 0) {
-      lines.push("  @location(0) _rmsl_fragColor: vec4<f32>,");
+      if (ctx.fragDepthUsed) {
+        lines.push("  @builtin(frag_depth) _rmsl_fragDepth: f32,");
+      }
+      lines.push("};");
+      lines.push("");
     }
-    if (ctx.fragDepthUsed) {
-      lines.push("  @builtin(frag_depth) _rmsl_fragDepth: f32,");
-    }
-    lines.push("};");
-    lines.push("");
+
     lines.push("@fragment");
     let fragParams = "";
     let fragVaryingLoc = 0;
@@ -2020,32 +3234,36 @@ function compileWGSLWithStage(
       if (fragParams) fragParams += ", ";
       fragParams += `@location(${fragVaryingLoc++}) ${info.slot}: ${info.type}`;
     }
-    lines.push(`fn main(${fragParams}) -> FragmentOutput {`);
-    lines.push("  var result: FragmentOutput;");
+    lines.push(`fn main(${fragParams})${hasFragmentOutput ? " -> FragmentOutput" : ""} {`);
+    if (hasFragmentOutput) {
+      lines.push("  var result: FragmentOutput;");
+    }
     for (let line of allBody) {
       lines.push("  " + line);
     }
-    if (ctx.outputs.size === 0 && lastExpr !== "0.0") {
+    if (emitImplicitColor) {
       lines.push(`  result._rmsl_fragColor = ${lastExpr};`);
     }
     if (ctx.fragDepthUsed && !allBody.some(l => l.includes("_rmsl_fragDepth ="))) {
       lines.push("  result._rmsl_fragDepth = 1.0;");
     }
-    lines.push("  return result;");
+    if (hasFragmentOutput) {
+      lines.push("  return result;");
+    }
     lines.push("}");
   }
   return lines.join("\n");
 }
 
 export const compileWGSL: {
-  (root: Node<ShaderType> | Node<ShaderType>[]): string;
-  vertex(root: Node<ShaderType> | Node<ShaderType>[]): string;
-  fragment(root: Node<ShaderType> | Node<ShaderType>[]): string;
+  (root: Node<ShaderType> | readonly Node<ShaderType>[]): string;
+  vertex(root: VertexRoot): string;
+  fragment(root: Node<ShaderType> | readonly Node<ShaderType>[]): string;
 } = Object.assign(
-  (root: Node<ShaderType> | Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
+  (root: Node<ShaderType> | readonly Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
   {
-    vertex: (root: Node<ShaderType> | Node<ShaderType>[]) => compileWGSLWithStage(root, "vertex"),
-    fragment: (root: Node<ShaderType> | Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
+    vertex: (root: VertexRoot) => compileWGSLWithStage(root as Node<ShaderType>, "vertex"),
+    fragment: (root: Node<ShaderType> | readonly Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
   },
 );
 
@@ -2057,7 +3275,7 @@ export type CompileFnOptions = {
 };
 
 function compileFnBody(
-  result: Node<any>,
+  result: Node<ShaderType>,
   params: Array<{ name: string; type: ShaderType }>,
   name: string,
   language: "glsl" | "wgsl",
@@ -2079,6 +3297,9 @@ function compileFnBody(
       outputs: new Map(),
       wgslSamplers: new Map(),
       varDefs: new Map(),
+      memo: new Map(),
+      wgslHelpers: new Set(),
+      positionWritten: false,
       inFn: false,
       fragDepthUsed: false,
     };
@@ -2087,7 +3308,9 @@ function compileFnBody(
     const paramStr = params.map(p => `${glslType(p.type)} ${p.name}`).join(", ");
     let code = "";
     ctx.uniforms.forEach((info) => {
-      code += `uniform ${info.type} ${info.slot};\n`;
+      code += info.length !== undefined
+        ? `uniform ${info.type} ${info.slot}[${info.length}];\n`
+        : `uniform ${info.type} ${info.slot};\n`;
     });
     if (ctx.uniforms.size > 0) {
       code += "\n";
@@ -2113,13 +3336,25 @@ function compileFnBody(
       outputs: new Map(),
       wgslSamplers: new Map(),
       varDefs: new Map(),
+      memo: new Map(),
+      wgslHelpers: new Set(),
+      positionWritten: false,
       inFn: false,
       fragDepthUsed: false,
     };
     const compiled = compileWGSLStage(result, ctx);
     const returnType = wgslType((result as any)._t || "float");
     const paramStr = params.map(p => `${p.name}: ${wgslType(p.type)}`).join(", ");
-    let code = `fn ${name}(${paramStr}) -> ${returnType} {\n`;
+    // Helpers standing in for GLSL builtins WGSL lacks, emitted ahead of the
+    // function that calls them. The whole-shader path does the same at its own
+    // top level; a function emitted on its own has to carry them itself, or it
+    // calls something that was never defined. Sorted so identical input gives
+    // identical output regardless of the order ops were reached.
+    let code = "";
+    for (const helper of [...ctx.wgslHelpers].sort()) {
+      code += `${WGSL_HELPERS[helper]}\n\n`;
+    }
+    code += `fn ${name}(${paramStr}) -> ${returnType} {\n`;
     for (const line of compiled.decls) {
       code += `  ${line}\n`;
     }
@@ -2132,17 +3367,40 @@ function compileFnBody(
       code += `  return ${returnType}();\n`;
     }
     code += `}\n`;
-    let ubBinding = 0;
+    // Same single-struct packing as a full shader, for the same reason: one
+    // binding per uniform runs out at twelve.
     let sortedUniforms = [...ctx.uniforms.entries()].sort((a, b) => a[1].slot.localeCompare(b[1].slot));
-    for (let [, info] of sortedUniforms) {
-      code += `@group(0) @binding(${ubBinding++}) var<uniform> ${info.slot}: ${info.type};\n`;
+    // A texture is sampled through a companion sampler, so both are declared
+    // or neither resolves. The whole-shader path does the same, in the same
+    // binding groups.
+    let samplerDecls = "";
+    let samplerBinding = 0;
+    ctx.wgslSamplers.forEach((info) => {
+      samplerDecls += `@group(2) @binding(${samplerBinding++}) var ${info.samplerSlot}: sampler;\n`;
+    });
+    let textureDecls = "";
+    let texBinding = 0;
+    for (let [, info] of sortedUniforms.filter(([, i]) => isWgslTexture(i.type))) {
+      textureDecls += `@group(1) @binding(${texBinding++}) var ${info.slot}: ${info.type};\n`;
+    }
+    if (textureDecls || samplerDecls) code = textureDecls + samplerDecls + "\n" + code;
+    let plainUniforms = sortedUniforms.filter(([, i]) => !isWgslTexture(i.type));
+    if (plainUniforms.length > 0) {
+      let layout = wgslUniformLayout(
+        plainUniforms.map(([, i]) => ({ slot: i.slot, type: i.type, length: i.length })),
+      );
+      let struct = `struct ${WGSL_UNIFORM_STRUCT} {\n`
+        + layout.members.map(m => `  ${m.name}: ${wgslMemberType(m)},\n`).join("")
+        + `};\n`
+        + `@group(0) @binding(0) var<uniform> ${WGSL_UNIFORM_BINDING}: ${WGSL_UNIFORM_STRUCT};\n\n`;
+      code = struct + code;
     }
     return code;
   }
 }
 
 export function compileGLSLFn(
-  fn: (...args: any[]) => Node<any>,
+  fn: (...args: any[]) => Node<ShaderType>,
   options: CompileFnOptions,
 ): string {
   const paramNodes = options.params.map(p => var_(p.name, p.type));
@@ -2151,7 +3409,7 @@ export function compileGLSLFn(
 }
 
 export function compileWGSLFn(
-  fn: (...args: any[]) => Node<any>,
+  fn: (...args: any[]) => Node<ShaderType>,
   options: CompileFnOptions,
 ): string {
   const paramNodes = options.params.map(p => var_(p.name, p.type));
