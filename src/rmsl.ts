@@ -1189,11 +1189,62 @@ export function continue_(): void {
 // ==== COMPILERS ====
 
 // ========== GLSL Compiler ==========
-/** What compiling one node yields: statements to emit, and how to refer to it. */
+/**
+ * What compiling one node yields: statements to emit, how to refer to it, and
+ * its operator precedence (higher = tighter binding, for bracket reduction).
+ *
+ * `prec` is omitted for atoms (literals, variables, function calls) — callers
+ * default it to `PREC_ATOM` so they never need wrapping.
+ */
 interface CompiledNode {
   decls: string[];
   body: string[];
   expr: string;
+  prec?: number;
+}
+
+/**
+ * Precedence values for bracket reduction. Higher number = tighter binding.
+ *
+ * GLSL and WGSL share the same relative ordering, so one table covers both.
+ */
+const PRECEDENCE: Record<string, number> = {
+  or: 10,
+  and: 20,
+  bitOr: 30,
+  bitXor: 40,
+  bitAnd: 50,
+  equal: 60,
+  notEqual: 60,
+  lessThan: 60,
+  greaterThan: 60,
+  lessThanEqual: 60,
+  greaterThanEqual: 60,
+  shiftLeft: 70,
+  shiftRight: 70,
+  add: 80,
+  sub: 80,
+  mult: 90,
+  div: 90,
+  mod: 90,
+};
+
+/** Precedence for unary operators (negate, not). Tighter than all binary ops. */
+const PREC_UNARY = 100;
+
+/** Precedence for atoms — never needs wrapping. */
+const PREC_ATOM = 200;
+
+/**
+ * Wrap a child expression in parens when its precedence is lower than (or equal
+ * to) the parent operator's, otherwise the child would be parsed differently.
+ */
+function wrapExpr(
+  childPrec: number | undefined,
+  parentPrec: number,
+  expr: string,
+): string {
+  return (childPrec ?? PREC_ATOM) <= parentPrec ? `(${expr})` : expr;
 }
 
 interface CompileCtx {
@@ -1461,7 +1512,7 @@ function compileGLSLStage(
   // expression naming the result is handed back. Emitting them again would
   // redeclare a variable, or run an assignment or a loop a second time.
   let seen = ctx.memo.get(node);
-  if (seen) return { decls: [], body: [], expr: seen.expr };
+  if (seen) return { decls: [], body: [], expr: seen.expr, prec: seen.prec };
 
   let result = compileGLSLNode(node, ctx);
   ctx.memo.set(node, result);
@@ -1595,23 +1646,25 @@ function compileGLSLNode(
     case "swizzle": {
       let src = compileGLSLStage(node.params![0], ctx);
       let pattern = node.value as string;
-      return { decls: src.decls, body: src.body, expr: `${src.expr}.${pattern}` };
+      let srcExpr = (src.prec ?? PREC_ATOM) < PREC_ATOM ? `(${src.expr})` : src.expr;
+      return { decls: src.decls, body: src.body, expr: `${srcExpr}.${pattern}`, prec: PREC_ATOM };
     }
 
     case "negate": {
       let a = compileGLSLStage(node.params![0], ctx);
-      return { decls: a.decls, body: a.body, expr: `(-${a.expr})` };
+      let childExpr = wrapExpr(a.prec, PREC_UNARY, a.expr);
+      return { decls: a.decls, body: a.body, expr: `-${childExpr}`, prec: PREC_UNARY };
     }
     case "not": {
       let a = compileGLSLStage(node.params![0], ctx);
       // GLSL's `!` takes a bool only; boolean vectors go through not().
       let operandType = (node.params![0] as any)?._t;
       let isBoolVector = operandType === "bvec2" || operandType === "bvec3" || operandType === "bvec4";
-      return {
-        decls: a.decls,
-        body: a.body,
-        expr: isBoolVector ? `not(${a.expr})` : `(!${a.expr})`,
-      };
+      if (isBoolVector) {
+        return { decls: a.decls, body: a.body, expr: `not(${a.expr})`, prec: PREC_ATOM };
+      }
+      let childExpr = wrapExpr(a.prec, PREC_UNARY, a.expr);
+      return { decls: a.decls, body: a.body, expr: `!${childExpr}`, prec: PREC_UNARY };
     }
 
     case "all": {
@@ -1670,17 +1723,22 @@ function compileGLSLNode(
       let vec = compileGLSLStage(node.params![1], ctx);
       let matType = (node.params![0] as any)?._t || "mat4";
       let vecType = (node.params![1] as any)?._t || "vec3";
+      let prec = PRECEDENCE.mult;
+      let matExpr = wrapExpr(mat.prec, prec, mat.expr);
+      let vecExpr = wrapExpr(vec.prec, prec, vec.expr);
       if (matType === "mat4" && vecType === "vec3") {
         return {
           decls: [...mat.decls, ...vec.decls],
           body: [...mat.body, ...vec.body],
-          expr: `(${mat.expr} * vec4(${vec.expr}, 1.0)).xyz`,
+          expr: `(${matExpr} * vec4(${vec.expr}, 1.0)).xyz`,
+          prec: PREC_ATOM,
         };
       }
       return {
         decls: [...mat.decls, ...vec.decls],
         body: [...mat.body, ...vec.body],
-        expr: `(${mat.expr} * ${vec.expr})`,
+        expr: `${matExpr} * ${vecExpr}`,
+        prec,
       };
     }
 
@@ -1716,10 +1774,12 @@ function compileGLSLNode(
       let idxExpr = idx.expr;
       let idxType = (node.params![1] as any)?._t || "float";
       if (idxType === "float") idxExpr = `int(${idxExpr})`;
+      let matExpr = (mat.prec ?? PREC_ATOM) < PREC_ATOM ? `(${mat.expr})` : mat.expr;
       return {
         decls: [...mat.decls, ...idx.decls],
         body: [...mat.body, ...idx.body],
-        expr: `${mat.expr}[${idxExpr}]`,
+        expr: `${matExpr}[${idxExpr}]`,
+        prec: PREC_ATOM,
       };
     }
 
@@ -1873,7 +1933,7 @@ function binaryGLSL(
   ctx: CompileCtx,
   op: string,
   isFn?: boolean,
-): { decls: string[]; body: string[]; expr: string } {
+): CompiledNode {
   let lhs = compileGLSLStage(node.params![0], ctx);
   let rhs = compileGLSLStage(node.params![1], ctx);
   let lhsType = (node.params![0] as any)?._t || "float";
@@ -1885,13 +1945,22 @@ function binaryGLSL(
   } else if ((lhsType === "int" || lhsType === "uint") && rhsType === "float") {
     lhsExpr = `float(${lhsExpr})`;
   }
-  let expr = isFn
-    ? `${op}(${lhsExpr}, ${rhsExpr})`
-    : `(${lhsExpr} ${op} ${rhsExpr})`;
+  if (isFn) {
+    return {
+      decls: [...lhs.decls, ...rhs.decls],
+      body: [...lhs.body, ...rhs.body],
+      expr: `${op}(${lhsExpr}, ${rhsExpr})`,
+      prec: PREC_ATOM,
+    };
+  }
+  let prec = PRECEDENCE[node.type] ?? 0;
+  lhsExpr = wrapExpr(lhs.prec, prec, lhsExpr);
+  rhsExpr = wrapExpr(rhs.prec, prec, rhsExpr);
   return {
     decls: [...lhs.decls, ...rhs.decls],
     body: [...lhs.body, ...rhs.body],
-    expr,
+    expr: `${lhsExpr} ${op} ${rhsExpr}`,
+    prec,
   };
 }
 
@@ -1900,7 +1969,7 @@ function comparisonGLSL(
   ctx: CompileCtx,
   op: string,
   fnName: string,
-): { decls: string[]; body: string[]; expr: string } {
+): CompiledNode {
   let a = compileGLSLStage(node.params![0], ctx);
   let b = compileGLSLStage(node.params![1], ctx);
   let lhsType = (node.params![0] as any)?._t || "float";
@@ -1913,11 +1982,22 @@ function comparisonGLSL(
   } else if (!isVec && (lhsType === "int" || lhsType === "uint") && rhsType === "float") {
     lhsExpr = `float(${lhsExpr})`;
   }
-  let expr = isVec ? `${fnName}(${lhsExpr}, ${rhsExpr})` : `(${lhsExpr} ${op} ${rhsExpr})`;
+  if (isVec) {
+    return {
+      decls: [...a.decls, ...b.decls],
+      body: [...a.body, ...b.body],
+      expr: `${fnName}(${lhsExpr}, ${rhsExpr})`,
+      prec: PREC_ATOM,
+    };
+  }
+  let prec = PRECEDENCE[node.type] ?? 0;
+  lhsExpr = wrapExpr(a.prec, prec, lhsExpr);
+  rhsExpr = wrapExpr(b.prec, prec, rhsExpr);
   return {
     decls: [...a.decls, ...b.decls],
     body: [...a.body, ...b.body],
-    expr,
+    expr: `${lhsExpr} ${op} ${rhsExpr}`,
+    prec,
   };
 }
 
@@ -2375,7 +2455,7 @@ function compileWGSLStage(
   // expression naming the result is handed back. Emitting them again would
   // redeclare a variable, or run an assignment or a loop a second time.
   let seen = ctx.memo.get(node);
-  if (seen) return { decls: [], body: [], expr: seen.expr };
+  if (seen) return { decls: [], body: [], expr: seen.expr, prec: seen.prec };
 
   let result = compileWGSLNode(node, ctx);
   ctx.memo.set(node, result);
@@ -2557,17 +2637,20 @@ function compileWGSLNode(
     case "swizzle": {
       let src = compileWGSLStage(node.params![0], ctx);
       let pattern = node.value as string;
-      return { decls: src.decls, body: src.body, expr: `${src.expr}.${pattern}` };
+      let srcExpr = (src.prec ?? PREC_ATOM) < PREC_ATOM ? `(${src.expr})` : src.expr;
+      return { decls: src.decls, body: src.body, expr: `${srcExpr}.${pattern}`, prec: PREC_ATOM };
     }
 
     case "negate": {
       let a = compileWGSLStage(node.params![0], ctx);
-      return { decls: a.decls, body: a.body, expr: `(-${a.expr})` };
+      let childExpr = wrapExpr(a.prec, PREC_UNARY, a.expr);
+      return { decls: a.decls, body: a.body, expr: `-${childExpr}`, prec: PREC_UNARY };
     }
     case "not": {
       // Unlike GLSL, WGSL's `!` is defined for vecN<bool> too.
       let a = compileWGSLStage(node.params![0], ctx);
-      return { decls: a.decls, body: a.body, expr: `(!${a.expr})` };
+      let childExpr = wrapExpr(a.prec, PREC_UNARY, a.expr);
+      return { decls: a.decls, body: a.body, expr: `!${childExpr}`, prec: PREC_UNARY };
     }
 
     case "all": {
@@ -2637,17 +2720,22 @@ function compileWGSLNode(
       let vec = compileWGSLStage(node.params![1], ctx);
       let matType = (node.params![0] as any)?._t || "mat4";
       let vecType = (node.params![1] as any)?._t || "vec3";
+      let prec = PRECEDENCE.mult;
+      let matExpr = wrapExpr(mat.prec, prec, mat.expr);
+      let vecExpr = wrapExpr(vec.prec, prec, vec.expr);
       if (matType === "mat4" && vecType === "vec3") {
         return {
           decls: [...mat.decls, ...vec.decls],
           body: [...mat.body, ...vec.body],
-          expr: `(${mat.expr} * vec4<f32>(${vec.expr}, 1.0)).xyz`,
+          expr: `(${matExpr} * vec4<f32>(${vec.expr}, 1.0)).xyz`,
+          prec: PREC_ATOM,
         };
       }
       return {
         decls: [...mat.decls, ...vec.decls],
         body: [...mat.body, ...vec.body],
-        expr: `(${mat.expr} * ${vec.expr})`,
+        expr: `${matExpr} * ${vecExpr}`,
+        prec,
       };
     }
 
@@ -2692,10 +2780,12 @@ function compileWGSLNode(
       let idxExpr = idx.expr;
       let idxType = (node.params![1] as any)?._t || "float";
       if (idxType === "float") idxExpr = `i32(${idxExpr})`;
+      let matExpr = (mat.prec ?? PREC_ATOM) < PREC_ATOM ? `(${mat.expr})` : mat.expr;
       return {
         decls: [...mat.decls, ...idx.decls],
         body: [...mat.body, ...idx.body],
-        expr: `${mat.expr}[${idxExpr}]`,
+        expr: `${matExpr}[${idxExpr}]`,
+        prec: PREC_ATOM,
       };
     }
 
@@ -3029,15 +3119,19 @@ function shiftWGSL(
   node: BaseNode<ShaderType>,
   ctx: CompileCtx,
   op: string,
-): { decls: string[]; body: string[]; expr: string } {
+): CompiledNode {
   let lhs = compileWGSLStage(node.params![0], ctx);
   let rhs = compileWGSLStage(node.params![1], ctx);
   let amountType = (node.params![1] as any)?._t;
-  let amount = amountType === "uint" ? rhs.expr : `u32(${rhs.expr})`;
+  let rhsExpr = amountType === "uint" ? rhs.expr : `u32(${rhs.expr})`;
+  let prec = PRECEDENCE[node.type] ?? 0;
+  let lhsExpr = wrapExpr(lhs.prec, prec, lhs.expr);
+  rhsExpr = wrapExpr(rhs.prec, prec, rhsExpr);
   return {
     decls: [...lhs.decls, ...rhs.decls],
     body: [...lhs.body, ...rhs.body],
-    expr: `(${lhs.expr} ${op} ${amount})`,
+    expr: `${lhsExpr} ${op} ${rhsExpr}`,
+    prec,
   };
 }
 
@@ -3046,7 +3140,7 @@ function binaryWGSL(
   ctx: CompileCtx,
   op: string,
   isFn?: boolean,
-): { decls: string[]; body: string[]; expr: string } {
+): CompiledNode {
   let lhs = compileWGSLStage(node.params![0], ctx);
   let rhs = compileWGSLStage(node.params![1], ctx);
   let lhsType = (node.params![0] as any)?._t || "float";
@@ -3060,13 +3154,22 @@ function binaryWGSL(
       rhsExpr = `i32(${rhs.expr})`;
     }
   }
-  let expr = isFn
-    ? `${op}(${lhsExpr}, ${rhsExpr})`
-    : `(${lhsExpr} ${op} ${rhsExpr})`;
+  if (isFn) {
+    return {
+      decls: [...lhs.decls, ...rhs.decls],
+      body: [...lhs.body, ...rhs.body],
+      expr: `${op}(${lhsExpr}, ${rhsExpr})`,
+      prec: PREC_ATOM,
+    };
+  }
+  let prec = PRECEDENCE[node.type] ?? 0;
+  lhsExpr = wrapExpr(lhs.prec, prec, lhsExpr);
+  rhsExpr = wrapExpr(rhs.prec, prec, rhsExpr);
   return {
     decls: [...lhs.decls, ...rhs.decls],
     body: [...lhs.body, ...rhs.body],
-    expr,
+    expr: `${lhsExpr} ${op} ${rhsExpr}`,
+    prec,
   };
 }
 
