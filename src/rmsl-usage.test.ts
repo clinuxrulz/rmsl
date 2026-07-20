@@ -167,13 +167,13 @@ describe("RMSL", () => {
   it("compiles float lessThan to GLSL", () => {
     let prog = Fn(() => float(1.0).lessThan(float(2.0)).toVar());
     let glsl = compileGLSL(prog());
-    expect(glsl).toContain("(1.0 < 2.0)");
+    expect(glsl).toContain("1.0 < 2.0");
   });
 
   it("compiles float lessThan to WGSL", () => {
     let prog = Fn(() => float(1.0).lessThan(float(2.0)).toVar());
     let wgsl = compileWGSL(prog());
-    expect(wgsl).toContain("(1f < 2f)");
+    expect(wgsl).toContain("1f < 2f");
   });
 
   // Comparing vectors gives one boolean per component, so the result is a
@@ -222,7 +222,7 @@ describe("RMSL", () => {
   it("negates a boolean vector component-wise in both backends", () => {
     let prog = Fn(() => vec3(1,2,3).lessThan(vec3(4,5,6)).not().toVar());
     expect(compileGLSL(prog())).toContain("not(lessThan(");
-    expect(compileWGSL(prog())).toContain("(!(");
+    expect(compileWGSL(prog())).toContain("!(");
   });
 
   // refract(I, N, eta) takes three arguments.
@@ -253,7 +253,7 @@ describe("RMSL", () => {
     });
     let glsl = compileGLSL(prog());
     let header = glsl.split("\n").find(l => l.includes("for ("))!;
-    expect(header).toMatch(/;\s*(\S+) = \(\1 \+ 1\.0\)\) \{$/);
+    expect(header).toMatch(/;\s*(\S+) = \1 \+ 1\.0\) \{$/);
   });
 
   it("emits the for-loop update clause in WGSL", () => {
@@ -269,7 +269,7 @@ describe("RMSL", () => {
     });
     let wgsl = compileWGSL(prog());
     let header = wgsl.split("\n").find(l => l.includes("for ("))!;
-    expect(header).toMatch(/;\s*(\S+) = \(\1 \+ 1f\)\) \{$/);
+    expect(header).toMatch(/;\s*(\S+) = \1 \+ 1f\) \{$/);
   });
 
   // dot/length/distance reduce a vector to a scalar, so their result type is
@@ -339,7 +339,7 @@ describe("RMSL", () => {
   it("compiles int lessThan", () => {
     let prog = Fn(() => int(1).lessThan(int(2)).toVar());
     let glsl = compileGLSL(prog());
-    expect(glsl).toContain("(1 < 2)");
+    expect(glsl).toContain("1 < 2");
   });
 
   // A plain JS number has no shader type of its own. A uniform is used because
@@ -347,9 +347,9 @@ describe("RMSL", () => {
   it("gives a plain number the operand's integer type", () => {
     let prog = Fn(() => uniform("int").mod(2).toVar());
     let glsl = compileGLSL(prog());
-    expect(glsl).toMatch(/int \S+ = \(\S+ % 2\);/);
+    expect(glsl).toMatch(/int \S+ = \S+ % 2;/);
     expect(glsl).not.toContain("float(");
-    expect(compileWGSL(prog())).toMatch(/var \S+: i32 = \(\S+ % 2i\);/);
+    expect(compileWGSL(prog())).toMatch(/var \S+: i32 = \S+ % 2i;/);
   });
 
   it("keeps float literals float", () => {
@@ -993,7 +993,7 @@ describe("RMSL", () => {
       params: [{ name: "a", type: "float" }, { name: "b", type: "float" }],
     });
     expect(glsl).toContain("float myFunc(float a, float b)");
-    expect(glsl).toContain("return sin((a + b));");
+    expect(glsl).toContain("return sin(a + b);");
 
     recordShaderSource("glsl", "fragment", `#version 300 es
 precision highp float;
@@ -1008,7 +1008,7 @@ void main(void) { outColor = vec4(myFunc(1.0, 2.0)); }`);
       params: [{ name: "a", type: "float" }, { name: "b", type: "float" }],
     });
     expect(wgsl).toContain("fn myFunc(a: f32, b: f32) -> f32");
-    expect(wgsl).toContain("return sin((a + b));");
+    expect(wgsl).toContain("return sin(a + b);");
 
     recordShaderSource("wgsl", "fragment", `${wgsl}
 @fragment fn main() -> @location(0) vec4<f32> {
@@ -1199,7 +1199,7 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
     expect(glsl.match(/if \(true\)/g) ?? []).toHaveLength(1);
     // The declaration and its only use are both inside the single block.
     let inner = glsl.slice(glsl.indexOf("if (true)"));
-    let declared = inner.match(/float (_rmsl_\d+) = \(_rmsl_\d+ \+ 2\.0\);/);
+    let declared = inner.match(/float (_rmsl_\d+) = _rmsl_\d+ \+ 2\.0;/);
     expect(declared, "inner declaration emitted").not.toBeNull();
     expect(inner.match(new RegExp(declared![1], "g")) ?? []).toHaveLength(2);
 
@@ -1278,12 +1278,12 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
 
       let glsl = compileGLSL(twoStepLoop(counterFirst)());
       let glslHeader = glsl.split("\n").find(l => l.includes("for ("))!;
-      expect(glslHeader, label).toMatch(/\+ 1\.0\).*,.*\+ 1\.0\)/);
+      expect(glslHeader, label).toMatch(/\+ 1\.0,.*\+ 1\.0/);
 
       // WGSL takes one statement in the header, so more than one moves into a
       // continuing block — which runs after the body, including after continue.
       let wgsl = compileWGSL(twoStepLoop(counterFirst)());
-      expect(wgsl.match(/\+ 1f\)/g) ?? [], label).toHaveLength(2);
+      expect(wgsl.match(/\+ 1f/g) ?? [], label).toHaveLength(2);
       expect(wgsl, label).toContain("continuing");
     }
   });
@@ -1301,7 +1301,7 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
       return total;
     });
     let wgsl = compileWGSL(prog());
-    expect(wgsl).toMatch(/for \(var \S+: f32 = 0f; .*; \S+ = \(\S+ \+ 1f\)\)/);
+    expect(wgsl).toMatch(/for \(var \S+: f32 = 0f; .*; \S+ = \S+ \+ 1f\)/);
     expect(wgsl).not.toContain("continuing");
   });
 
@@ -1309,11 +1309,11 @@ void main(void) { outColor = vec4(scale(2.0)); }`);
   // type of the operand it sits beside.
   it("gives a compared literal the operand's integer type", () => {
     let unsigned = Fn(() => uniform("uint").lessThan(2).toVar());
-    expect(compileWGSL(unsigned())).toMatch(/\(\S+ < 2u\)/);
+    expect(compileWGSL(unsigned())).toMatch(/\S+ < 2u/);
     expect(compileGLSL(unsigned())).not.toContain("float(");
 
     let signed = Fn(() => uniform("int").greaterThan(3).toVar());
-    expect(compileWGSL(signed())).toMatch(/\(\S+ > 3i\)/);
+    expect(compileWGSL(signed())).toMatch(/\S+ > 3i/);
     expect(compileGLSL(signed())).not.toContain("float(");
   });
 
