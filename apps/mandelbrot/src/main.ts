@@ -99,6 +99,17 @@ const resetBtn = document.getElementById("resetBtn") as HTMLButtonElement;
 const hudZoom = document.getElementById("hudZoom") as HTMLElement;
 const hudPan = document.getElementById("hudPan") as HTMLElement;
 
+// === Dirty-flag render scheduling ===
+let needsRender = false;
+let rafId: number | null = null;
+
+function requestRender() {
+  needsRender = true;
+  if (rafId === null) {
+    rafId = requestAnimationFrame(render);
+  }
+}
+
 function updateUI() {
   precisionBtn.classList.toggle("active", useHighPrecision);
   precisionBtn.innerHTML = useHighPrecision
@@ -110,11 +121,14 @@ function updateUI() {
   const zoomFactor = 1.0 / scale;
   hudZoom.textContent = zoomFactor > 1e4 ? zoomFactor.toExponential(2) + "x" : zoomFactor.toFixed(1) + "x";
   hudPan.textContent = `(${panX.toFixed(6)}, ${panY.toFixed(6)})`;
+
+  requestRender();
 }
 
 precisionBtn.addEventListener("click", () => {
   useHighPrecision = !useHighPrecision;
   updateUI();
+  requestRender();
 });
 
 iterInput.addEventListener("input", (e) => {
@@ -124,6 +138,7 @@ iterInput.addEventListener("input", (e) => {
 
 paletteSelect.addEventListener("change", (e) => {
   palette = parseInt((e.target as HTMLSelectElement).value, 10);
+  requestRender();
 });
 
 resetBtn.addEventListener("click", () => {
@@ -299,8 +314,12 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
-// === Render loop ===
+// === Render (on-demand, driven by dirty flag) ===
 function render() {
+  rafId = null;
+  if (!needsRender) return;
+  needsRender = false;
+
   const w = canvas.width;
   const h = canvas.height;
   gl!.viewport(0, 0, w, h);
@@ -324,8 +343,7 @@ function render() {
 
   gl!.bindVertexArray(vao);
   gl!.drawArrays(gl!.TRIANGLE_STRIP, 0, 4);
-
-  requestAnimationFrame(render);
 }
 
-render();
+// Initial render
+requestRender();
