@@ -36,6 +36,10 @@
     "./scene": {
       "import": "./dist/scene.js",
       "types": "./dist/scene/index.d.ts"
+    },
+    "./test": {
+      "import": "./dist/test.js",
+      "types": "./dist/test/index.d.ts"
     }
   },
   "scripts": {

@@ -329,6 +329,13 @@ Float textures sample with nearest-neighbour lookup at normalized coordinates;
 integer textures (`isampler*`/`usampler*`) fetch at texel coordinates. The
 `textureLod` LOD argument is ignored. Data is RGBA in a flat array.
 
+### Testing with it
+
+Unit-testing a shader's logic is what this target makes possible without a
+device, and `@random-mesh/rmsl/test` is the ergonomic layer over it — inputs
+bound by node instead of by slot name, a grid of fragments in one call, and
+tolerant comparisons. See [Testing](testing.md).
+
 ### Caveats
 
 - The JS target computes f64, the GPUs f32 — results can differ by a ULP or
