@@ -13,7 +13,7 @@ import type { NodeMaterial, MaterialProgram } from "../materials/NodeMaterial";
 import { Blending, Side } from "../materials/Material";
 import {
   cameraUniformValue, isIntegerSampler, objectUniformValue, lightsSignature,
-  shaderPrecision, toBufferView, uniformUploadValue,
+  shaderPrecision, toBufferView,
   rendererUniformValue, programSignature, geometryAttribute,
 } from "./common";
 
@@ -212,23 +212,38 @@ export class WebGLRenderer {
   private setUniform(location: WebGLUniformLocation, type: string, value: number | number[] | Float32Array): void {
     const gl = this.gl;
     // Scalar uniforms arrive as a bare number (opacity, roughness, ...); the
-    // vector/matrix ones as arrays. `array[0]` on a bare number is undefined,
+    // vector/matrix ones as arrays. `value[0]` on a bare number is undefined,
     // which would upload NaN and blacken the surface — so the scalar is
     // uploaded directly.
-    const { scalar, array } = uniformUploadValue(value);
+    if (typeof value === "number") {
+      switch (type) {
+        case "float": gl.uniform1f(location, value); break;
+        case "int": case "bool": gl.uniform1i(location, value); break;
+        // A bare number is not a vector or a matrix, and an unknown type is
+        // skipped rather than guessed.
+        default: break;
+      }
+      return;
+    }
+    // Vectors go up through the component forms (`uniform3f`) rather than the
+    // array forms (`uniform3fv`). The array forms take a typed array, so
+    // uploading through them meant building one per uniform per draw — a scene
+    // drawing a few dozen vector uniforms was allocating thousands of throwaway
+    // typed arrays a second. Only the matrix forms have no component
+    // equivalent, and both a plain array and a typed array are accepted there.
     switch (type) {
-      case "float": gl.uniform1f(location, scalar ?? array[0]); break;
-      case "int": gl.uniform1i(location, scalar ?? array[0]); break;
-      case "bool": gl.uniform1i(location, scalar ?? array[0]); break;
-      case "vec2": gl.uniform2fv(location, array); break;
-      case "vec3": gl.uniform3fv(location, array); break;
-      case "vec4": gl.uniform4fv(location, array); break;
-      case "ivec2": gl.uniform2iv(location, array); break;
-      case "ivec3": gl.uniform3iv(location, array); break;
-      case "ivec4": gl.uniform4iv(location, array); break;
-      case "mat2": gl.uniformMatrix2fv(location, false, array); break;
-      case "mat3": gl.uniformMatrix3fv(location, false, array); break;
-      case "mat4": gl.uniformMatrix4fv(location, false, array); break;
+      case "float": gl.uniform1f(location, value[0]); break;
+      case "int": gl.uniform1i(location, value[0]); break;
+      case "bool": gl.uniform1i(location, value[0]); break;
+      case "vec2": gl.uniform2f(location, value[0], value[1]); break;
+      case "vec3": gl.uniform3f(location, value[0], value[1], value[2]); break;
+      case "vec4": gl.uniform4f(location, value[0], value[1], value[2], value[3]); break;
+      case "ivec2": gl.uniform2i(location, value[0], value[1]); break;
+      case "ivec3": gl.uniform3i(location, value[0], value[1], value[2]); break;
+      case "ivec4": gl.uniform4i(location, value[0], value[1], value[2], value[3]); break;
+      case "mat2": gl.uniformMatrix2fv(location, false, value); break;
+      case "mat3": gl.uniformMatrix3fv(location, false, value); break;
+      case "mat4": gl.uniformMatrix4fv(location, false, value); break;
       default:
         // Unknown types are skipped rather than guessed.
         break;
