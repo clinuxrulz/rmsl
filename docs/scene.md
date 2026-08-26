@@ -267,6 +267,20 @@ scene.add(mesh);
   instancing variant of a material — so a plain mesh and an `InstancedMesh`
   sharing one material each get the shader that matches it.
 
+## Testing a material without a renderer
+
+A material is a node graph, so what it computes can be checked on the CPU — no
+canvas, no device, no readback:
+
+```typescript
+import { fromProgram } from "@random-mesh/rmsl/test";
+
+const shade = fromProgram(material.build(scene, {}));
+shade({ varyings: { normalWorld: [0, 1, 0], positionWorld: [0, 0, 0] } });
+```
+
+See [Testing](testing.md).
+
 ## Limitations
 
 - `LineSegments2.raycast` and `InstancedMesh.raycast` are not ported yet (no

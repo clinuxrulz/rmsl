@@ -53,6 +53,30 @@ describe("evaluate", () => {
     expect(result.value).toEqual([4, 4, 4, 4]);
   });
 
+  it("reads an 8-bit texture the way a float sampler on a GPU does", () => {
+    const map = uniform("sampler2D");
+    const graph = map.texture(vec2(0.5, 0.5));
+    const data = new Uint8Array([0, 128, 255, 255]);
+    // Scaled through a 32-bit float, as a GPU's sampler does, so the middle
+    // value lands a hair off the exact ratio.
+    expect(closeTo(
+      evaluate(() => graph, { textures: [[map, { data, width: 1, height: 1 }]] }).value,
+      [0, 128 / 255, 1, 1],
+    )).toBe(true);
+    // The stored bytes are still there for a test that wants them.
+    expect(evaluate(() => graph, { textures: [[map, { data, width: 1, height: 1 }]], bytes: "raw" }).value)
+      .toEqual([0, 128, 255, 255]);
+  });
+
+  it("leaves an integer texture's texels alone", () => {
+    const map = uniform("isampler2D");
+    const graph = map.texture(ivec2(0, 0));
+    const data = new Uint8Array([0, 128, 255, 255]);
+    // An integer sampler fetches raw texels on a GPU too.
+    expect(evaluate(() => graph, { textures: [[map, { data, width: 1, height: 1 }]] }).value)
+      .toEqual([0, 128, 255, 255]);
+  });
+
   it("takes a texture in the shape a scene DataTexture already has", () => {
     const map = uniform("isampler2D");
     const graph = map.texture(ivec2(1, 0));

@@ -150,6 +150,74 @@ run.source;  // the generated JavaScript, for when a result needs explaining
 
 A runner is accepted anywhere a graph is, including by `render`.
 
+## Materials and effect passes
+
+A built material is a node graph like any other, so it runs here too — which
+means a lighting model, a colour node or a texture lookup is testable without a
+renderer, a canvas or a light rig.
+
+```typescript
+import { fromProgram } from "@random-mesh/rmsl/test";
+
+const shade = fromProgram(material.build(scene, {}));
+
+shade({ varyings: { normalWorld: [0, 1, 0], positionWorld: [0, 0, 0] } });
+```
+
+Everything is addressed by the name the program uses — `uv`, `normalWorld`,
+`materialColor` — not by node. Material-scope uniforms fill themselves in from
+the program (the colour, the roughness, the light set), and a `DataTexture` a
+material already points at is sampled as it stands. The matrices a renderer
+would compute default to the identity, so a material that only shades a surface
+needs nothing further:
+
+```typescript
+fromProgram(program, {
+  uniforms: { cameraPosition: [0, 0, 5], materialColor: [1, 0, 0] },  // by name
+  resolution: [1920, 1080],   // what a renderer-scope `resolution` uniform holds
+  context: { camera, mesh },  // for a material whose uniform values read them
+});
+```
+
+`shade.unbound` lists the uniforms nothing filled in — the first place to look
+when a result comes back `NaN`.
+
+A runner from a program is a runner like any other, so `render` drives it:
+
+```typescript
+const image = render(shade, {
+  width: 64,
+  height: 64,
+  inputs: ({ u, v }) => ({ varyings: { uv: [u, v] } }),
+});
+```
+
+One pass of an effect works the same way, its input textures named as the pass
+names them:
+
+```typescript
+import { fromPass } from "@random-mesh/rmsl/test";
+
+const run = fromPass(pass, {
+  textures: { source: { data: pixels, width: 4, height: 4 } },
+});
+```
+
+A pass that reads `uv()` also holds a screen-size uniform it never named; reach
+it with `uniformsIn(pass.color, "vec2")`.
+
+The program is taken by shape, not by import, so nothing here drags the scene
+graph or the effects into a test that only wanted a shader.
+
+### Byte textures
+
+An 8-bit texture holds 0–255, and a float sampler on a GPU reads it back as
+0–1. That scaling belongs to the sampler, which the CPU has none of, so bytes
+bound to a float sampler are scaled here to match what a renderer would show —
+through a 32-bit float, as the hardware does. An integer sampler fetches raw
+texels on a GPU too and is left alone. Pass `{ bytes: "raw" }` to see the stored
+values instead.
+
 ## Comparing values
 
 Shader arithmetic is not reproduced exactly by the arithmetic a test writes out

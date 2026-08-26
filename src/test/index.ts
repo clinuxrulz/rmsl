@@ -69,12 +69,19 @@ export type TextureBinding = {
 
 // === Inputs ===
 
+/**
+ * Values by name rather than by node. The names are a program's own — `uv`,
+ * `materialColor`, the ones `fromProgram` and `fromPass` know — falling back to
+ * a node's `.name` for a graph that has no program behind it.
+ */
+export type NamedValues = Record<string, unknown>;
+
 /** What a shader reads when it is evaluated. */
 export interface ShaderInputs {
-  uniforms?: readonly ValueBinding[];
-  varyings?: readonly ValueBinding[];
-  attributes?: readonly ValueBinding[];
-  textures?: readonly TextureBinding[];
+  uniforms?: readonly ValueBinding[] | NamedValues;
+  varyings?: readonly ValueBinding[] | NamedValues;
+  attributes?: readonly ValueBinding[] | NamedValues;
+  textures?: readonly TextureBinding[] | Record<string, TextureData>;
   /** The pixel `fragCoord()` reports, as `[x, y]`. */
   fragCoord?: readonly [number, number];
 }
@@ -91,6 +98,12 @@ export interface RunnerOptions extends ShaderInputs {
   derivatives?: "zero" | "throw";
   /** Give each call its own scratch variables. Default `false`. */
   reentrant?: boolean;
+  /**
+   * What an 8-bit texture bound to a float sampler holds. `"normalize"` (the
+   * default) scales it to 0–1, as a GPU's sampler does; `"raw"` keeps the
+   * stored 0–255.
+   */
+  bytes?: "normalize" | "raw";
 }
 
 /** What a shader produced for one fragment. */
@@ -133,6 +146,29 @@ export function runner<A extends ShaderType>(
   graph: () => Node<A>,
   options: RunnerOptions = {},
 ): ShaderRunner<A> {
+  return compileRunner(graph, options);
+}
+
+/**
+ * The name a program gives each of its slots, per kind. Kept apart rather than
+ * flattened because one program can call an attribute and a varying the same
+ * thing — a material's `uv` is both.
+ */
+interface NameMaps {
+  uniforms?: Map<string, string>;
+  varyings?: Map<string, string>;
+  attributes?: Map<string, string>;
+  textures?: Map<string, string>;
+  /** Which sampler type each texture slot is declared as, by slot. */
+  samplerTypes?: Map<string, string>;
+}
+
+/** `runner`, plus the names a program brings with it. */
+function compileRunner<A extends ShaderType>(
+  graph: () => Node<A>,
+  options: RunnerOptions,
+  names?: NameMaps,
+): ShaderRunner<A> {
   const compileOptions = {
     name: "rmslTestShader",
     params: [],
@@ -144,7 +180,7 @@ export function runner<A extends ShaderType>(
   const source = compileJSFn(graph, compileOptions);
 
   const run = (inputs: ShaderInputs = {}): EvaluationResult<A> =>
-    readResult<A>(callable(mergeContext(options, inputs)));
+    readResult<A>(callable(mergeContext(options, inputs, names)));
   return Object.defineProperties(run, {
     source: { value: source, enumerable: true },
     [RUNNER]: { value: true },
@@ -318,6 +354,204 @@ function image(
   };
 }
 
+// === Programs and passes ===
+
+/**
+ * A compiled material, in the shape `NodeMaterial.build()` returns. Described
+ * structurally rather than imported, so this module never pulls the scene graph
+ * into a test that only wanted a shader.
+ */
+export interface ProgramLike {
+  fragmentRoot: Node<"vec4">;
+  vertexRoot?: Node<"vec4">;
+  uniforms?: readonly ProgramUniform[];
+  varyings?: readonly ProgramSlot[];
+  attributes?: readonly ProgramSlot[];
+  samplers?: readonly ProgramSampler[];
+}
+
+export interface ProgramSlot {
+  /** The name the program calls it — `uv`, `materialColor`. */
+  name: string;
+  node: { name: string };
+}
+
+export interface ProgramUniform extends ProgramSlot {
+  scope?: string;
+  /** Where a material-scope uniform gets its value. */
+  value?: (context: any) => number | number[];
+}
+
+export interface ProgramSampler extends ProgramSlot {
+  type?: string;
+  /** The texture the material points at, if it points at one. */
+  texture?: () => unknown;
+}
+
+/** One fullscreen pass, in the shape `@random-mesh/rmsl/effects` describes. */
+export interface PassLike {
+  color: Node<"vec4">;
+  /** The samplers the pass reads, by the name the caller gave them. */
+  inputs?: Record<string, { name: string }>;
+}
+
+export interface ProgramOptions extends RunnerOptions {
+  /**
+   * What a material-scope uniform's own value function is called with. A
+   * material that reads the camera or the mesh to compute a uniform needs them;
+   * one that does not, does not.
+   */
+  context?: unknown;
+  /** What the renderer-scope `resolution` uniform holds. Default `[1, 1]`. */
+  resolution?: readonly [number, number];
+}
+
+/** A shader compiled from a program, with the names it was built under. */
+export interface ProgramRunner extends ShaderRunner<"vec4"> {
+  /**
+   * Uniforms nothing filled in — neither the program, nor a built-in default,
+   * nor the options. Reading one of these gives `undefined`, and arithmetic on
+   * it gives `NaN`, so this is the first place to look when a result is not a
+   * number.
+   */
+  readonly unbound: string[];
+}
+
+/**
+ * Run a built material — or anything else shaped like a compiled program — on
+ * the CPU, addressed by the names the program uses rather than by node.
+ *
+ * ```typescript
+ * const shade = fromProgram(material.build(scene, {}));
+ * shade({ varyings: { uv: [0.5, 0.5], normalWorld: [0, 1, 0] } });
+ * ```
+ *
+ * Material-scope uniforms fill themselves in from the program — a colour, a
+ * roughness, the light set — and a `DataTexture` bound to a sampler is read as
+ * it stands. The matrices a renderer would supply default to the identity, so a
+ * material that only shades a surface needs nothing else; pass your own values
+ * by name where they matter.
+ */
+export function fromProgram(program: ProgramLike, options: ProgramOptions = {}): ProgramRunner {
+  const stage = options.stage ?? "fragment";
+  const root = stage === "vertex" ? program.vertexRoot : program.fragmentRoot;
+  if (!root) throw new Error(`[RMSL/test] the program has no ${stage} root to run`);
+
+  const names: NameMaps = {
+    uniforms: slotNames(program.uniforms),
+    varyings: slotNames(program.varyings),
+    attributes: slotNames(program.attributes),
+    textures: slotNames(program.samplers),
+    samplerTypes: new Map(
+      (program.samplers ?? [])
+        .filter((sampler): sampler is ProgramSampler & { type: string } => typeof sampler.type === "string")
+        .map((sampler) => [sampler.node.name, sampler.type]),
+    ),
+  };
+
+  const given = slots(names.uniforms, options.uniforms);
+  const uniforms: Record<string, unknown> = {};
+  const unbound: string[] = [];
+  for (const binding of program.uniforms ?? []) {
+    if (binding.node.name in given) continue;
+    const value = programValue(binding, options);
+    if (value === undefined) unbound.push(binding.name);
+    else uniforms[binding.node.name] = value;
+  }
+
+  const textures: Record<string, TextureData> = {};
+  for (const sampler of program.samplers ?? []) {
+    const texture = asTextureData(sampler.texture?.());
+    if (texture) textures[sampler.node.name] = texture;
+  }
+
+  const run = compileRunner<"vec4">(() => root, {
+    ...options,
+    uniforms: { ...uniforms, ...given },
+    textures: {
+      ...textures,
+      ...textureSlots(names.textures, names.samplerTypes, "raw", options.textures),
+    },
+  }, names);
+
+  return Object.defineProperties(run, {
+    unbound: { value: unbound, enumerable: true },
+  }) as ProgramRunner;
+}
+
+/**
+ * Run one fullscreen pass of an effect on the CPU, its input textures given by
+ * the names the pass calls them.
+ *
+ * ```typescript
+ * const run = fromPass(pass, { textures: { source: { data, width: 4, height: 4 } } });
+ * render(run, { width: 4, height: 4 });
+ * ```
+ *
+ * A pass that reads `uv()` also holds a screen-size uniform it never named;
+ * bind it with `uniformsIn(pass.color, "vec2")`.
+ */
+export function fromPass(pass: PassLike, options: RunnerOptions = {}): ShaderRunner<"vec4"> {
+  const textures = new Map<string, string>();
+  const samplerTypes = new Map<string, string>();
+  for (const [name, node] of Object.entries(pass.inputs ?? {})) {
+    textures.set(name, node.name);
+    const type = (node as { _t?: string })._t;
+    if (type) samplerTypes.set(node.name, type);
+  }
+  return compileRunner<"vec4">(() => pass.color, options, { textures, samplerTypes });
+}
+
+/** Which slot each of a program's names points at. */
+function slotNames(bindings: readonly ProgramSlot[] | undefined): Map<string, string> {
+  return new Map((bindings ?? []).map((binding) => [binding.name, binding.node.name]));
+}
+
+/** What a program can say a uniform holds, or a sensible stand-in. */
+function programValue(binding: ProgramUniform, options: ProgramOptions): unknown {
+  try {
+    const own = binding.value?.(options.context);
+    if (own !== undefined && !(Array.isArray(own) && own.length === 0)) return own;
+  } catch {
+    // A value function that reaches for a camera or a mesh it was not given.
+    // The name falls through to a default, or to whatever the caller passes.
+  }
+  if (binding.name === "resolution") return [...(options.resolution ?? [1, 1])];
+  return RENDERER_DEFAULTS[binding.name];
+}
+
+const IDENTITY_MAT4 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+const IDENTITY_MAT3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+/**
+ * What the matrices a renderer would compute hold when no renderer is running.
+ * The identity puts the surface in world space at the origin, which is the
+ * frame a shading term is easiest to reason about.
+ */
+const RENDERER_DEFAULTS: Record<string, unknown> = {
+  modelMatrix: IDENTITY_MAT4,
+  viewMatrix: IDENTITY_MAT4,
+  projectionMatrix: IDENTITY_MAT4,
+  normalMatrix: IDENTITY_MAT3,
+  cameraPosition: [0, 0, 0],
+};
+
+/** A texture the CPU can sample, from whatever a sampler binding points at. */
+function asTextureData(texture: unknown): TextureData | null {
+  if (typeof texture !== "object" || texture === null) return null;
+  const candidate = texture as { image?: unknown; data?: unknown; width?: number; height?: number; depth?: number };
+  const pixels = candidate.data ?? candidate.image;
+  // An HTMLImageElement or a canvas has no pixels to read without a browser.
+  if (!ArrayBuffer.isView(pixels) && !Array.isArray(pixels)) return null;
+  if (typeof candidate.width !== "number" || typeof candidate.height !== "number") return null;
+  return {
+    data: pixels as ArrayLike<number>,
+    width: candidate.width,
+    height: candidate.height,
+    depth: candidate.depth,
+  };
+}
+
 /**
  * The uniform nodes a graph reads, in the order they are reached, each name
  * appearing once. With a shader type, only the uniforms of that type — which
@@ -450,35 +684,88 @@ function asRunner<A extends ShaderType>(
 }
 
 /** Slot-keyed context for the compiled callable, defaults under the call's own. */
-function mergeContext(defaults: ShaderInputs, inputs: ShaderInputs): JsShaderContext {
+function mergeContext(
+  defaults: RunnerOptions,
+  inputs: ShaderInputs,
+  names?: NameMaps,
+): JsShaderContext {
   return {
-    uniforms: slots(defaults.uniforms, inputs.uniforms),
-    varyings: slots(defaults.varyings, inputs.varyings),
-    attributes: slots(defaults.attributes, inputs.attributes),
-    textures: textureSlots(defaults.textures, inputs.textures),
+    uniforms: slots(names?.uniforms, defaults.uniforms, inputs.uniforms),
+    varyings: slots(names?.varyings, defaults.varyings, inputs.varyings),
+    attributes: slots(names?.attributes, defaults.attributes, inputs.attributes),
+    textures: textureSlots(
+      names?.textures, names?.samplerTypes, defaults.bytes ?? "normalize",
+      defaults.textures, inputs.textures,
+    ),
     fragCoord: (inputs.fragCoord ?? defaults.fragCoord) as [number, number] | undefined,
   };
 }
 
-function slots(...lists: (readonly ValueBinding[] | undefined)[]): Record<string, unknown> {
+function slots(
+  names: Map<string, string> | undefined,
+  ...given: (readonly ValueBinding[] | NamedValues | undefined)[]
+): Record<string, unknown> {
   const record: Record<string, unknown> = {};
-  for (const list of lists) {
-    for (const [node, value] of list ?? []) record[node.name] = value;
+  for (const values of given) {
+    if (values === undefined) continue;
+    if (Array.isArray(values)) {
+      for (const [node, value] of values as readonly ValueBinding[]) record[node.name] = value;
+    } else {
+      for (const [name, value] of Object.entries(values as NamedValues)) {
+        record[names?.get(name) ?? name] = value;
+      }
+    }
   }
   return record;
 }
 
 function textureSlots(
-  ...lists: (readonly TextureBinding[] | undefined)[]
+  names: Map<string, string> | undefined,
+  samplerTypes: Map<string, string> | undefined,
+  bytes: "normalize" | "raw",
+  ...given: (readonly TextureBinding[] | Record<string, TextureData> | undefined)[]
 ): Record<string, JsTextureData> {
   const record: Record<string, JsTextureData> = {};
-  for (const list of lists) {
-    for (const [node, texture] of list ?? []) {
+  for (const values of given) {
+    if (values === undefined) continue;
+    const pairs: [string, TextureData, string | undefined][] = Array.isArray(values)
+      ? (values as readonly TextureBinding[]).map(([node, texture]) => [node.name, texture, node._t])
+      : Object.entries(values as Record<string, TextureData>).map(([name, texture]) => [name, texture, undefined]);
+    for (const [name, texture, nodeType] of pairs) {
+      const slot = names?.get(name) ?? name;
+      const type = nodeType ?? samplerTypes?.get(slot);
       const data = "data" in texture ? texture.data : texture.image;
-      record[node.name] = { data, width: texture.width, height: texture.height, depth: texture.depth };
+      record[slot] = {
+        data: bytes === "normalize" ? normalized(data, type) : data,
+        width: texture.width,
+        height: texture.height,
+        depth: texture.depth,
+      };
     }
   }
   return record;
+}
+
+/** Byte textures already turned into the 0–1 values a float sampler reads. */
+const NORMALIZED = new WeakMap<object, Float32Array>();
+
+/**
+ * An 8-bit texture holds 0–255, and a float sampler on a GPU reads it back as
+ * 0–1 — that scaling is the sampler's, not the graph's, so the CPU target,
+ * which has no sampler, returns the stored number. Bytes bound to a float
+ * sampler are scaled here instead, so what a test measures is what a renderer
+ * would show. An integer sampler fetches raw texels on a GPU too, and is left
+ * alone; so is a sampler whose type nothing here knows.
+ */
+function normalized(data: ArrayLike<number>, samplerType: string | undefined): ArrayLike<number> {
+  const isBytes = data instanceof Uint8Array || data instanceof Uint8ClampedArray;
+  if (!isBytes || samplerType === undefined || !samplerType.startsWith("sampler")) return data;
+  const cached = NORMALIZED.get(data);
+  if (cached) return cached;
+  const scaled = new Float32Array(data.length);
+  for (let i = 0; i < data.length; i++) scaled[i] = data[i] / 255;
+  NORMALIZED.set(data, scaled);
+  return scaled;
 }
 
 /**

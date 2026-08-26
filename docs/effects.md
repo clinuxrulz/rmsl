@@ -152,3 +152,16 @@ camera). The single-pass color family, the blur family, and bloom are.
 `src/effects/effects-usage.test.ts` compiles every effect to both backends
 through the recording compilers, so the whole set is handed to real GLSL and
 WGSL drivers in the GPU validation layer.
+
+What an effect *computes* can be checked without a device at all: an effect is
+a function of nodes, so it evaluates on the CPU, and one pass of a pass graph
+runs with its input textures given by name.
+
+```typescript
+import { evaluate, fromPass } from "@random-mesh/rmsl/test";
+
+evaluate(() => sepia(vec4(1, 1, 1, 1)));
+fromPass(pass, { textures: { source: { data: pixels, width: 4, height: 4 } } })();
+```
+
+See [Testing](testing.md).
