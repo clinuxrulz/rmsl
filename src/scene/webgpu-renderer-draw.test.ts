@@ -175,6 +175,38 @@ globalThis.__rmslGpuSamplersRun = async () => {
 };
 `;
 
+// Instancing: two boxes drawn from one geometry, each with its own transform
+// and colour. The instance transform is a mat4 attribute, which WGSL takes as
+// four vec4 columns — an instance drawn at the wrong place, or every instance
+// drawn at the same place, is what a mistake there looks like.
+const ENTRY_INSTANCED = `
+import { WebGPURenderer, Scene, InstancedMesh, PerspectiveCamera, BoxGeometry,
+  MeshBasicMaterial, Matrix4, Color } from "./index";
+${READBACK}
+globalThis.__rmslGpuInstancedRun = async () => {
+  const canvas = document.createElement("canvas");
+  canvas.width = 32;
+  canvas.height = 32;
+  const renderer = await WebGPURenderer.init(canvas);
+  renderer.setClearColor(0x000000);
+  const scene = new Scene();
+  const mesh = new InstancedMesh(new BoxGeometry(), new MeshBasicMaterial(), 2);
+  mesh.setMatrixAt(0, new Matrix4().makeTranslation(-1.1, 0, 0));
+  mesh.setMatrixAt(1, new Matrix4().makeTranslation(1.1, 0, 0));
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.setColorAt(0, new Color().setRGB(1, 0, 0));
+  mesh.setColorAt(1, new Color().setRGB(0, 0, 1));
+  mesh.instanceColor.needsUpdate = true;
+  scene.add(mesh);
+  const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+  camera.position.set(0, 0, 4);
+  camera.lookAt(0, 0, 0);
+  renderer.render(scene, camera);
+  await renderer.device.queue.onSubmittedWorkDone();
+  return { left: readPixel(canvas, 8, 16), right: readPixel(canvas, 24, 16) };
+};
+`;
+
 async function bundleEntry(source: string): Promise<string> {
   const result = await build({
     stdin: {
@@ -234,6 +266,16 @@ describe.skipIf(!WEBGPU)("WebGPURenderer on a real adapter", () => {
     expect(pixel.g).toBeGreaterThan(100);
     expect(pixel.g).toBeLessThan(140);
     expect(pixel.b).toBeGreaterThan(190);
+  }, 60_000);
+
+  it("draws each instance with its own transform and colour", async () => {
+    const result = await runInBrowser(ENTRY_INSTANCED, "__rmslGpuInstancedRun");
+    // The left box is red and the right one blue, so each instance was placed
+    // by its own matrix and tinted by its own colour.
+    expect(result.left.r).toBeGreaterThan(100);
+    expect(result.left.b).toBeLessThan(60);
+    expect(result.right.b).toBeGreaterThan(100);
+    expect(result.right.r).toBeLessThan(60);
   }, 60_000);
 
   it("shows a texture rewritten between renders", async () => {

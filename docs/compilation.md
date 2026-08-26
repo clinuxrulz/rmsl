@@ -159,6 +159,43 @@ struct VertexInput {
 };
 ```
 
+A matrix attribute — an instance transform, say — arrives as its columns, since
+WGSL puts no matrix at a `@location`. Four `vec4<f32>` at four consecutive
+locations, put back together at the top of `main`:
+
+```wgsl
+struct VertexInput {
+  @location(0) _rmsl_a0: vec3<f32>,
+  @location(1) _rmsl_a1_0: vec4<f32>,
+  @location(2) _rmsl_a1_1: vec4<f32>,
+  @location(3) _rmsl_a1_2: vec4<f32>,
+  @location(4) _rmsl_a1_3: vec4<f32>,
+};
+
+@vertex
+fn main(input: VertexInput) -> VertexOutput {
+  var result: VertexOutput;
+  let _rmsl_a1 = mat4x4<f32>(input._rmsl_a1_0, input._rmsl_a1_1, input._rmsl_a1_2, input._rmsl_a1_3);
+  ...
+```
+
+The buffer is unchanged by this — one 64-byte record per instance, read as four
+columns — so a vertex layout that feeds GLSL's `in mat4` feeds this too. The
+locations a matrix occupies are its column count, so whatever follows it starts
+four along.
+
+### Narrowing a matrix
+
+GLSL writes the normal-matrix idiom as `mat3(modelMatrix)`, dropping the fourth
+column and row. WGSL has no constructor that takes a matrix, so RMSL emits a
+helper that truncates the columns, and calls it with the source expression once:
+
+```wgsl
+fn _rmsl_mat3_from_mat4(m: mat4x4<f32>) -> mat3x3<f32> {
+  return mat3x3<f32>(m[0].xyz, m[1].xyz, m[2].xyz);
+}
+```
+
 ## Binding Model (WGSL)
 
 | Resource | Group | Binding |

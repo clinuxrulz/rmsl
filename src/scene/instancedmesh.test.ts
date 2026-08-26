@@ -154,7 +154,7 @@ describe("instanced materials", () => {
     expect(glsl.split("\n---\n")[0]).toContain("in mat4 ");
     expect(glsl.split("\n---\n")[0]).toMatch(/\* vec4\(/);
     expect(glsl.split("\n---\n")[0]).toContain("mat3(");
-    expect(wgsl.split("\n---\n")[0]).toContain("mat4x4<f32>");
+    expect(wgsl.split("\n---\n")[0]).toMatch(/mat4x4<f32>\(input\./);
     expect(wgsl.split("\n---\n")[0]).toContain("mat3x3<f32>(");
   });
 
@@ -166,31 +166,39 @@ describe("instanced materials", () => {
     expect(glsl.split("\n---\n")[1]).toMatch(/\* _rmsl_v\d+/);
   });
 
+  it("takes the instance matrix in as its four columns", () => {
+    // WGSL puts no matrix at a `@location`: a vertex input is a scalar or a
+    // vector. The matrix arrives as four vec4 columns at four consecutive
+    // locations — which is how the buffer is laid out anyway, one 64-byte
+    // record per instance — and is put back together in the shader.
+    const scene = new Scene();
+    const program = new MeshStandardMaterial().build(scene, { instancing: true });
+    const { wgsl } = compileMaterial(program);
+    const vertex = wgsl.split("\n---\n")[0];
+
+    const columns = vertexLocations(wgsl).filter((l) => /_\d$/.test(l.name));
+    expect(columns).toHaveLength(4);
+    expect(columns.map((c) => c.type)).toEqual(Array(4).fill("vec4<f32>"));
+    expect(columns.map((c) => c.location)).toEqual([1, 2, 3, 4]);
+
+    // No `@location` declares a matrix, and the columns are assembled into one.
+    expect(vertexLocations(wgsl).some((l) => l.type.startsWith("mat"))).toBe(false);
+    const slot = columns[0].name.replace(/_0$/, "");
+    expect(vertex).toContain(
+      `let ${slot} = mat4x4<f32>(input.${slot}_0, input.${slot}_1, input.${slot}_2, input.${slot}_3);`,
+    );
+  });
+
   it("advances the WGSL attribute location by four for a mat4", () => {
     const scene = new Scene();
     const program = new MeshStandardMaterial().build(scene, { instancing: true });
     const { wgsl } = compileMaterial(program);
 
     const locations = vertexLocations(wgsl);
-    const im = locations.find((l) => l.type === "mat4x4<f32>");
-    expect(im).toBeDefined();
-    const index = locations.indexOf(im!);
-    // The next vertex input starts four locations after the matrix.
-    expect(locations[index + 1].location).toBe(im!.location + 4);
-  });
-
-  it("keeps the matrix's stride implicit in the WGSL struct", () => {
-    // The WGSL struct declares the matrix once; its four locations and 64-byte
-    // stride are supplied by the pipeline's vertex layout, which the renderer
-    // must expand to four float32x4 columns. This test pins the compiler side:
-    // the single mat4 member, with the next attribute four locations later.
-    const scene = new Scene();
-    const program = new MeshBasicMaterial().build(scene, { instancing: true });
-    const { wgsl } = compileMaterial(program);
-    const locations = vertexLocations(wgsl);
-    const im = locations.find((l) => l.type === "mat4x4<f32>");
-    expect(im).toBeDefined();
-    expect(locations.filter((l) => l.type === "mat4x4<f32>")).toHaveLength(1);
+    const lastColumn = locations.filter((l) => /_\d$/.test(l.name)).at(-1)!;
+    const index = locations.indexOf(lastColumn);
+    // The next vertex input starts after the matrix's four locations.
+    expect(locations[index + 1].location).toBe(lastColumn.location + 1);
   });
 
   it("the renderer's vertex-layout rule matches the compiler's locations", () => {
@@ -211,7 +219,11 @@ describe("instanced materials", () => {
       return { name: a.node.name, location: start, type: a.node._t };
     });
 
-    const compiled = vertexLocations(wgsl).map((l) => ({ name: l.name, location: l.location, type: l.type }));
+    // A matrix occupies four locations under four names, so the shader is read
+    // back by where each attribute *starts*: the column named `<slot>_0`.
+    const compiled = vertexLocations(wgsl)
+      .filter((l) => !/_[1-9]\d*$/.test(l.name))
+      .map((l) => ({ name: l.name.replace(/_0$/, ""), location: l.location, type: l.type }));
     expect(compiled.map((c) => c.location)).toEqual(rendered.map((r) => r.location));
     expect(compiled.map((c) => c.name)).toEqual(rendered.map((r) => r.name));
   });

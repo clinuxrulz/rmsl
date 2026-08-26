@@ -2001,6 +2001,38 @@ describe("GLSL precision", () => {
   });
 });
 
+describe("matrix narrowing", () => {
+  it("cuts a mat4 down to a mat3 through a helper in WGSL", () => {
+    // The normal-matrix idiom: GLSL takes `mat3(m)`, WGSL takes no matrix in a
+    // matrix constructor at all, so the columns are truncated in a helper —
+    // once, however large the expression handed to it.
+    let model = uniform("mat4");
+    let prog = Fn(() => mat3(model).mul(vec3(0, 1, 0)).toVar());
+    let glsl = compileGLSL(prog());
+    let wgsl = compileWGSL(prog());
+
+    expect(glsl).toContain("mat3(");
+    expect(wgsl).toContain("fn _rmsl_mat3_from_mat4(m: mat4x4<f32>) -> mat3x3<f32>");
+    expect(wgsl).toContain("mat3x3<f32>(m[0].xyz, m[1].xyz, m[2].xyz)");
+    expect(wgsl).toMatch(/_rmsl_mat3_from_mat4\(_rmsl_uniforms\./);
+  });
+
+  it("narrows to a mat2 from either width", () => {
+    let fromMat4 = Fn(() => mat2(uniform("mat4")).mul(vec2(1, 0)).toVar());
+    let fromMat3 = Fn(() => mat2(uniform("mat3")).mul(vec2(1, 0)).toVar());
+    expect(compileWGSL(fromMat4())).toContain("_rmsl_mat2_from_mat4(");
+    expect(compileWGSL(fromMat3())).toContain("_rmsl_mat2_from_mat3(");
+  });
+
+  it("leaves a matrix built from columns or a scalar alone", () => {
+    // Only a matrix cut down from a bigger one needs the helper.
+    let columns = Fn(() => mat3(vec3(1, 0, 0), vec3(0, 1, 0), vec3(0, 0, 1)).mul(vec3(1, 1, 1)).toVar());
+    let scaled = Fn(() => mat3(float(2)).mul(vec3(1, 1, 1)).toVar());
+    expect(compileWGSL(columns())).not.toContain("_from_mat");
+    expect(compileWGSL(scaled())).not.toContain("_from_mat");
+  });
+});
+
 describe("casts and conversions", () => {
   it("casts a float to an int in GLSL and WGSL", () => {
     let prog = Fn(() => {

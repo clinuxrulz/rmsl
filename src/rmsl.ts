@@ -3510,10 +3510,28 @@ const MATRIX_DIMENSIONS: Record<string, [number, number]> = {
  * location counter advances by its column count rather than one.
  */
 function wgslAttributeLocationCount(type: string): number {
-  if (type === "mat2x2<f32>") return 2;
-  if (type === "mat3x3<f32>") return 3;
-  if (type === "mat4x4<f32>") return 4;
-  return 1;
+  return wgslMatrixColumns(type)?.count ?? 1;
+}
+
+/**
+ * The columns a matrix attribute arrives as, or null for anything else.
+ *
+ * WGSL takes no matrix at a `@location`: a vertex input is a scalar or a
+ * vector, so a `mat4x4<f32>` instance transform comes in as its four
+ * `vec4<f32>` columns at four consecutive locations, and is put back together
+ * in the shader. That is also how the buffer is laid out on both backends —
+ * one 64-byte record per instance, read as four columns — so nothing about the
+ * data changes, only how the shader receives it.
+ */
+function wgslMatrixColumns(type: string): { count: number; columnType: string } | null {
+  const match = /^mat(\d)x(\d)<(.+)>$/.exec(type);
+  if (!match) return null;
+  return { count: Number(match[1]), columnType: `vec${match[2]}<${match[3]}>` };
+}
+
+/** The name a matrix attribute's `index`th column is declared under. */
+function wgslMatrixColumnSlot(slot: string, index: number): string {
+  return `${slot}_${index}`;
 }
 
 /**
@@ -3528,6 +3546,24 @@ function wgslAttributeLocationCount(type: string): number {
  * so it passes through. Expanding it instead produced
  * `mat3x3<f32>(m, 0f, 0f, 0f, m, ...)`, a constructor that does not exist.
  */
+/**
+ * The helper that cuts one matrix down to a smaller one, or null when the
+ * construction is not that.
+ *
+ * GLSL writes the normal-matrix idiom as `mat3(modelMatrix)`, dropping the
+ * fourth column and row. WGSL has no constructor that takes a matrix at all, so
+ * the columns have to be cut down by hand — through a helper rather than
+ * inline, so however large the source expression is, it is evaluated once.
+ */
+function wgslMatrixNarrowing(target: string, source: string | undefined): string | null {
+  const to = MATRIX_DIMENSIONS[target];
+  const from = source === undefined ? undefined : MATRIX_DIMENSIONS[source];
+  if (to === undefined || from === undefined) return null;
+  if (to[0] >= from[0] || to[1] >= from[1]) return null;
+  const helper = `_rmsl_${target}_from_${source}`;
+  return helper in WGSL_HELPERS ? helper : null;
+}
+
 function wgslMatrixArgs(
   type: string,
   args: string[],
@@ -3841,6 +3877,20 @@ function compileWGSLNode(
         };
       }
 
+      // The same narrowing one step up: a matrix cut down to a smaller matrix,
+      // which GLSL spells as a constructor and WGSL has no spelling for.
+      let narrowing = params.length === 1
+        ? wgslMatrixNarrowing(node._t as string, sourceType)
+        : null;
+      if (narrowing) {
+        ctx.wgslHelpers.add(narrowing);
+        return {
+          decls: params[0].decls,
+          body: params[0].body,
+          expr: `${narrowing}(${params[0].expr})`,
+        };
+      }
+
       let args = wgslMatrixArgs(
         node._t as string,
         params.map((p: any) => p.expr),
@@ -3930,7 +3980,11 @@ function compileWGSLNode(
       if (v && v.id != null && !ctx.attributes.has(v.id)) {
         ctx.attributes.set(v.id, { type: wgslType(v.shaderType), slot: v.slot });
       }
-      return { decls: [], body: [], expr: ctx.shaderStage === "vertex" ? `input.${v.slot}` : v.slot };
+      if (ctx.shaderStage !== "vertex") return { decls: [], body: [], expr: v.slot };
+      // A matrix attribute is rebuilt from its columns at the top of `main`,
+      // under its own slot name, so a reference to it is a plain local read.
+      const isMatrix = wgslMatrixColumns(wgslType(v.shaderType)) !== null;
+      return { decls: [], body: [], expr: isMatrix ? v.slot : `input.${v.slot}` };
     }
 
     case "varying": {
@@ -4496,6 +4550,18 @@ function compileWGSLNode(
  * same formulation as the mat4Inverse used on the JS side.
  */
 const WGSL_HELPERS: Record<string, string> = {
+  // A matrix cut down to a smaller one, which GLSL writes as `mat3(m)` — the
+  // normal-matrix idiom above all. WGSL takes no matrix in a matrix
+  // constructor, so each column is truncated and passed on its own.
+  _rmsl_mat3_from_mat4: `fn _rmsl_mat3_from_mat4(m: mat4x4<f32>) -> mat3x3<f32> {
+  return mat3x3<f32>(m[0].xyz, m[1].xyz, m[2].xyz);
+}`,
+  _rmsl_mat2_from_mat4: `fn _rmsl_mat2_from_mat4(m: mat4x4<f32>) -> mat2x2<f32> {
+  return mat2x2<f32>(m[0].xy, m[1].xy);
+}`,
+  _rmsl_mat2_from_mat3: `fn _rmsl_mat2_from_mat3(m: mat3x3<f32>) -> mat2x2<f32> {
+  return mat2x2<f32>(m[0].xy, m[1].xy);
+}`,
   // A floored modulus, which is what GLSL's mod() computes and what WGSL's %
   // does not. One per width, because the operands are broadcast to match.
   _rmsl_mod_float: `fn _rmsl_mod_float(x: f32, y: f32) -> f32 {
@@ -4811,7 +4877,14 @@ function compileWGSLWithStage(
       let attrLoc = 0;
       const vertexInputs = [...ctx.attributes.entries()].sort((a, b) => a[0] - b[0]);
       for (const [, info] of vertexInputs) {
-        lines.push(`  @location(${attrLoc}) ${info.slot}: ${info.type},`);
+        const matrix = wgslMatrixColumns(info.type);
+        if (matrix) {
+          for (let column = 0; column < matrix.count; column++) {
+            lines.push(`  @location(${attrLoc + column}) ${wgslMatrixColumnSlot(info.slot, column)}: ${matrix.columnType},`);
+          }
+        } else {
+          lines.push(`  @location(${attrLoc}) ${info.slot}: ${info.type},`);
+        }
         attrLoc += wgslAttributeLocationCount(info.type);
       }
       lines.push("};");
@@ -4845,6 +4918,17 @@ function compileWGSLWithStage(
       lines.push("fn main() -> VertexOutput {");
     }
     lines.push("  var result: VertexOutput;");
+    // Put each matrix attribute back together from the columns it arrived in,
+    // before anything reads it.
+    for (const [, info] of [...ctx.attributes.entries()].sort((a, b) => a[0] - b[0])) {
+      const matrix = wgslMatrixColumns(info.type);
+      if (!matrix) continue;
+      const columns = Array.from(
+        { length: matrix.count },
+        (_, column) => `input.${wgslMatrixColumnSlot(info.slot, column)}`,
+      );
+      lines.push(`  let ${info.slot} = ${info.type}(${columns.join(", ")});`);
+    }
     for (let line of allBody) {
       lines.push("  " + line);
     }
