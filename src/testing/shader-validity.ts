@@ -21,7 +21,8 @@
  *
  * Wiring: a test file aliases the compilers through `recordGLSL`/`recordWGSL`,
  * so no individual test changes, then awaits `assertRecordedShadersValid()` in
- * `afterAll`.
+ * `afterAll`. A test that asserts a compiler *refuses* something goes through
+ * `expectCompileRejection` instead, which records nothing — see its comment.
  */
 
 import { expect } from "vitest";
@@ -147,6 +148,49 @@ export function recordShaderSource(
     src,
   });
   return src;
+}
+
+/**
+ * Run a compile a test expects to be *rejected*, and hand back the message.
+ *
+ * A test that asserts a compiler refuses something is making a claim about the
+ * refusal, not about a shader — there is no output for a driver to check. Most
+ * such tests need nothing special here: both backends refuse the same program,
+ * and a pair that failed on both sides is already read as agreement rather than
+ * a defect. The case this exists for is a rejection only one backend can make.
+ * `precision` is a GLSL option and the WGSL compiler takes no options at all,
+ * so `{ precision: "high" }` is refused by GLSL while WGSL compiles the program
+ * happily — which the report would otherwise have to read as GLSL failing on
+ * something its counterpart accepted.
+ *
+ * So nothing recorded inside the call is kept. What either backend produced
+ * along the way is incidental to a test about the rejection, and holding it to
+ * a validator states a claim the test never made.
+ */
+export function expectCompileRejection(compile: () => string): string {
+  const mark = recorded.length;
+  let source: string | undefined;
+  let error: unknown;
+  try {
+    source = compile();
+  } catch (thrown) {
+    error = thrown;
+  } finally {
+    recorded.length = mark;
+  }
+
+  if (error === undefined) {
+    throw new Error(
+      "expectCompileRejection: expected the compiler to reject this" +
+        ` program, but it returned source:\n${source}`,
+    );
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Everything recorded so far. For the harness's own tests to read back. */
+export function recordedShaders(): readonly Recorded[] {
+  return recorded;
 }
 
 /**

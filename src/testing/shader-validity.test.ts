@@ -8,7 +8,13 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { validationReport, type Recorded } from "./shader-validity";
+import {
+  validationReport,
+  expectCompileRejection,
+  recordShaderSource,
+  recordedShaders,
+  type Recorded,
+} from "./shader-validity";
 
 function shader(test: string, lang: "glsl" | "wgsl", pair: number): Recorded {
   return { test, lang, stage: "fragment", pair, src: "<source>" };
@@ -73,5 +79,32 @@ describe("validation reporting", () => {
     const report = validationReport(recorded, [], [null], {});
     expect(report).not.toBeNull();
     expect(report).toContain("one refuses");
+  });
+});
+
+// The escape hatch from the rule directly above: one backend refusing what the
+// other accepts is a defect, unless the test asked for the refusal.
+describe("expected rejections", () => {
+  it("hands back the message the compiler refused with", () => {
+    expect(
+      expectCompileRejection(() => {
+        throw new Error('unknown precision "high"');
+      }),
+    ).toMatch(/precision/);
+  });
+
+  it("keeps nothing the refused compile recorded on its way to throwing", () => {
+    const before = recordedShaders().length;
+    expectCompileRejection(() => {
+      recordShaderSource("wgsl", "fragment", "fn main() {}");
+      throw new Error("rejected");
+    });
+    expect(recordedShaders()).toHaveLength(before);
+  });
+
+  it("fails when the compile it expected to be refused succeeds", () => {
+    expect(() => expectCompileRejection(() => "fn main() {}")).toThrow(
+      /returned source/,
+    );
   });
 });

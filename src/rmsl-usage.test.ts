@@ -29,6 +29,7 @@ import {
   recordingGLSL as compileGLSL,
   recordingWGSL as compileWGSL,
   recordShaderSource,
+  expectCompileRejection,
   assertRecordedShadersValid,
 } from "./testing/shader-validity";
 
@@ -1994,10 +1995,15 @@ describe("GLSL precision", () => {
   });
 
   it("rejects an unknown precision", () => {
+    // Wrapped rather than asserted with `toThrow`: precision is a GLSL option,
+    // so this is a refusal WGSL has no way to join in on, and the validity
+    // layer would read the pair as GLSL failing on what WGSL accepted.
     let prog = Fn(() => float(1).toVar());
-    expect(() => compileGLSL(prog(), { precision: "high" as any })).toThrow(
-      /precision/,
-    );
+    expect(
+      expectCompileRejection(() =>
+        compileGLSL(prog(), { precision: "high" as any }),
+      ),
+    ).toMatch(/precision/);
   });
 });
 
