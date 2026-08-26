@@ -4712,6 +4712,7 @@ function unaryWGSL(
 function compileWGSLWithStage(
   root: Node<ShaderType> | readonly Node<ShaderType>[],
   shaderStage: "vertex" | "fragment",
+  options?: CompileWGSLOptions,
 ): string {
   let ctx: CompileCtx = {
     nextId: 0,
@@ -4769,10 +4770,17 @@ function compileWGSLWithStage(
   for (let [, info] of textures) {
     lines.push(`@group(1) @binding(${texBinding++}) var ${info.slot}: ${info.type};`);
   }
-  if (plain.length > 0) {
-    let layout = wgslUniformLayout(
-      plain.map(([, i]) => ({ slot: i.slot, type: i.type, length: i.length })),
-    );
+  // The struct a stage declares is normally what that stage reads. A program
+  // compiled as two stages sharing one uniform buffer cannot work that way: the
+  // members each stage happens to read differ, so the same byte offset would
+  // mean a different value in each, and in the buffer the host packs. Passing
+  // the program's whole uniform set makes all three agree — a member a stage
+  // never reads costs it nothing.
+  let declared = options?.uniforms
+    ? sharedUniformMembers(options.uniforms, plain.map(([, i]) => i))
+    : plain.map(([, i]) => ({ slot: i.slot, type: i.type, length: i.length }));
+  if (declared.length > 0) {
+    let layout = wgslUniformLayout(declared);
     lines.push(`struct ${WGSL_UNIFORM_STRUCT} {`);
     for (let m of layout.members) lines.push(`  ${m.name}: ${wgslMemberType(m)},`);
     lines.push("};");
@@ -4907,17 +4915,66 @@ function compileWGSLWithStage(
   return lines.join("\n");
 }
 
+/**
+ * A uniform of the program being compiled, as the WGSL struct declares it.
+ * `slot` is the uniform node's name and `type` its WGSL type; `length` is set
+ * for a uniform array.
+ */
+export type WgslUniformDeclaration = { slot: string; type: string; length?: number };
+
+export type CompileWGSLOptions = {
+  /**
+   * Every uniform of the program, not only the ones this stage reads.
+   *
+   * A vertex and a fragment stage compiled from one program share a single
+   * uniform buffer at `@group(0) @binding(0)`. Each stage declaring only what
+   * it reads gives the two different structs — and a third layout again in
+   * whatever the host packs — so a member lands at one offset in one stage and
+   * another offset in the other. Pass the whole set to both stages, and to
+   * `wgslUniformLayout` when packing the buffer, and all three agree.
+   */
+  uniforms?: WgslUniformDeclaration[];
+};
+
 export const compileWGSL: {
-  (root: Node<ShaderType> | readonly Node<ShaderType>[]): string;
-  vertex(root: VertexRoot): string;
-  fragment(root: Node<ShaderType> | readonly Node<ShaderType>[]): string;
+  (root: Node<ShaderType> | readonly Node<ShaderType>[], options?: CompileWGSLOptions): string;
+  vertex(root: VertexRoot, options?: CompileWGSLOptions): string;
+  fragment(root: Node<ShaderType> | readonly Node<ShaderType>[], options?: CompileWGSLOptions): string;
 } = Object.assign(
-  (root: Node<ShaderType> | readonly Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
+  (root: Node<ShaderType> | readonly Node<ShaderType>[], options?: CompileWGSLOptions) =>
+    compileWGSLWithStage(root, "fragment", options),
   {
-    vertex: (root: VertexRoot) => compileWGSLWithStage(root as Node<ShaderType>, "vertex"),
-    fragment: (root: Node<ShaderType> | readonly Node<ShaderType>[]) => compileWGSLWithStage(root, "fragment"),
+    vertex: (root: VertexRoot, options?: CompileWGSLOptions) =>
+      compileWGSLWithStage(root as Node<ShaderType>, "vertex", options),
+    fragment: (root: Node<ShaderType> | readonly Node<ShaderType>[], options?: CompileWGSLOptions) =>
+      compileWGSLWithStage(root, "fragment", options),
   },
 );
+
+/**
+ * The struct members to declare when a caller has named the program's whole
+ * uniform set: that set, checked against what this stage actually reads.
+ *
+ * A uniform the stage reads but the caller left out would compile to a
+ * reference to a member that does not exist, which the driver reports as a
+ * syntax error somewhere in generated code. Saying so here names the slot.
+ */
+function sharedUniformMembers(
+  declared: WgslUniformDeclaration[],
+  used: { slot: string; type: string; length?: number }[],
+): WgslUniformDeclaration[] {
+  let names = new Set(declared.map(u => u.slot));
+  for (let uniform of used) {
+    if (!names.has(uniform.slot)) {
+      throw new Error(
+        `[RMSL] the uniform "${uniform.slot}" is read by this stage but missing`
+        + ` from the uniforms passed to the compiler. Pass every uniform of the`
+        + ` program, so both stages and the host agree on the buffer layout.`,
+      );
+    }
+  }
+  return declared;
+}
 
 // ========== JS Compiler ==========
 /**

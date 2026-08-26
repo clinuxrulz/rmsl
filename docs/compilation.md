@@ -167,6 +167,40 @@ struct VertexInput {
 | Textures | `@group(1)` | `@binding(N)` |
 | Samplers | `@group(2)` | `@binding(N)` |
 
+Every uniform that is not a texture goes into one struct at
+`@group(0) @binding(0)`, since WGSL allows only a handful of uniform buffers per
+stage. A draw therefore sets one bind group per kind: the uniform buffer, the
+textures, the samplers.
+
+### Two stages, one uniform buffer
+
+A stage declares the uniforms it reads. Compile a vertex and a fragment stage
+from one program and each gets a struct of its own — a material colour the
+fragment stage alone reads, matrices the vertex stage alone reads — so the same
+byte offset means a different value in each, and different again in the buffer
+the host packs.
+
+Pass the program's whole uniform set to both stages, and to
+`wgslUniformLayout` when packing the buffer, and all three agree:
+
+```typescript
+const uniforms = [
+  { slot: "materialColor", type: "vec3<f32>" },
+  { slot: "modelMatrix", type: "mat4x4<f32>" },
+  { slot: "projectionMatrix", type: "mat4x4<f32>" },
+  { slot: "viewMatrix", type: "mat4x4<f32>" },
+];
+
+const vertex = compileWGSL.vertex(vertexRoot, { uniforms });
+const fragment = compileWGSL.fragment(fragmentRoot, { uniforms });
+const layout = wgslUniformLayout(uniforms);  // the offsets to write at
+```
+
+A member a stage never reads costs it nothing. A uniform a stage *does* read but
+the list leaves out is an error, named by slot, rather than a shader that fails
+to compile in the driver. `@random-mesh/rmsl/scene`'s WebGPU renderer does this
+for every material it draws.
+
 ## Standalone Function Compilers
 
 For use with Three.js `glslFn`/`wgslFn` or other embedding scenarios, RMSL provides `compileGLSLFn` and `compileWGSLFn` to compile individual functions with custom names and parameters:

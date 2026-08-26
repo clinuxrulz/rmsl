@@ -64,6 +64,25 @@ pnpm type-check    # catches them too, as ordinary type errors
 Add a case whenever an operation's result type is not simply its receiver's:
 anything that reduces, anything whose defining operand is not the first.
 
+**Drawing.** `src/scene/renderer.test.ts` and
+`src/scene/webgpu-renderer-draw.test.ts` bundle the scene library, draw in a
+real browser and read the pixels back — the WebGL renderer through Chromium's
+SwiftShader, the WebGPU one through a real adapter.
+
+Getting WebGPU there took two things that are not flags, and both are in
+`src/testing/gpu.ts`. `navigator.gpu` is exposed only to a secure context, so
+the page is served from `http://127.0.0.1` rather than being `about:blank` like
+the GLSL one. And Playwright's default browser is the headless *shell*, which
+has no adapter behind `navigator.gpu`, so the WebGPU browser is launched with
+`channel: "chromium"` — and separately from the GLSL browser, whose SwiftShader
+arguments take the WebGPU adapter away.
+
+This layer is worth adding to whenever the renderers do something neither the
+compilers nor a stub can be asked about: binding groups, uploading, culling,
+blending, instancing. The WebGPU renderer went a long time with no test that
+drew anything, and two bugs that made every textured material draw nothing sat
+there the whole time.
+
 ### Skipping the GPU layers
 
 The layers that need a graphics device are **on by default**, so a plain
@@ -76,7 +95,7 @@ loop and a workable mutation run:
 
 | Variable | Turns off |
 |---|---|
-| `RMSL_SKIP_GPU` | every layer needing a device or a browser |
+| `RMSL_SKIP_GPU` | every layer needing a device or a browser, drawing included |
 | `RMSL_SKIP_SHADER_VALIDATION` | validity only |
 | `RMSL_SKIP_SHADER_EVALUATION` | evaluating the two shading languages |
 

@@ -24,14 +24,23 @@ import {
 interface PipelineEntry {
   program: MaterialProgram;
   pipeline: GPURenderPipeline;
+  /** The uniform buffer's group, which nothing invalidates. */
+  bindGroup: GPUBindGroup;
   /**
-   * Null once a texture this entry binds has been disposed — the group holds a
-   * view of a destroyed texture, so `ensurePipeline` builds a new one before
-   * the next draw.
+   * The texture and sampler groups, in the groups the compiled WGSL declares
+   * them in. Null once what they hold has gone — a disposed texture, one
+   * re-created at a new size, one that changed how it is sampled — so
+   * `ensurePipeline` builds them again before the next draw. Null too when the
+   * program samples nothing.
    */
-  bindGroup: GPUBindGroup | null;
-  bindGroupLayout: GPUBindGroupLayout;
-  /** One entry per texture binding, and per sampler binding, of the group. */
+  textureBindGroup: GPUBindGroup | null;
+  samplerBindGroup: GPUBindGroup | null;
+  bindGroupLayouts: {
+    uniforms: GPUBindGroupLayout;
+    textures: GPUBindGroupLayout | null;
+    samplers: GPUBindGroupLayout | null;
+  };
+  /** One entry per texture binding, and per sampler binding, of those groups. */
   textureBindings: { name: string; type: SamplerShaderType; binding: number }[];
   samplerBindings: { name: string; binding: number }[];
   /** Ring of uniform slots so per-draw writes never race the previous draw. */
@@ -198,7 +207,11 @@ export class WebGPURenderer {
       firstPass = false;
 
       pass.setPipeline(entry.pipeline);
-      pass.setBindGroup(0, entry.bindGroup!, [slotIndex * entry.slotSize]);
+      // The compiler puts the uniform struct in group 0, textures in group 1
+      // and samplers in group 2, so a draw sets one group per kind.
+      pass.setBindGroup(0, entry.bindGroup, [slotIndex * entry.slotSize]);
+      if (entry.textureBindGroup) pass.setBindGroup(1, entry.textureBindGroup);
+      if (entry.samplerBindGroup) pass.setBindGroup(2, entry.samplerBindGroup);
       this.setVertexBuffers(pass, entry, mesh);
 
       const geometry = mesh.geometry;
@@ -256,27 +269,39 @@ export class WebGPURenderer {
     const entry = bySignature?.get(signature);
     if (entry && !material.needsUpdate) {
       this.refreshTextures(entry);
-      // A texture disposed since the last draw took this entry's bind group
-      // with it, and so does one that had to be re-created at a new size;
-      // rebuild it from the textures the material points at now.
-      entry.bindGroup ??= this.createBindGroup(entry);
+      // A texture disposed since the last draw took this entry's texture and
+      // sampler groups with it, and so does one re-created at a new size;
+      // build them again from the textures the material points at now.
+      this.bindTextures(entry);
       return entry;
     }
 
     const program = material.build(scene, { instancing, instancingColor });
     const device = this.device;
 
-    const vertexModule = device.createShaderModule({ code: compileWGSL.vertex(program.vertexRoot) });
-    const fragmentModule = device.createShaderModule({ code: compileWGSL.fragment(program.fragmentRoot) });
-
     // The uniform struct the compiler emits, member offsets included. The
     // compiler lays out members from its own alphabetical sort of the slots,
     // so the same sorted order must be fed to `wgslUniformLayout` here or the
     // byte offsets drift from what the WGSL struct actually declares.
+    //
+    // The same list goes to both stages. Left to itself each stage declares
+    // only the uniforms it reads, which are not the same two sets — a material
+    // colour is read by the fragment stage alone, the matrices by the vertex
+    // stage alone — so the one buffer bound to both would mean something
+    // different in each, and different again from what is packed here.
     const uniforms = [...program.uniforms].sort((a, b) => a.node.name.localeCompare(b.node.name));
-    const layout = wgslUniformLayout(
-      uniforms.map((u) => ({ slot: u.node.name, type: wgslTypeName(u.node._t) })),
-    );
+    const declaredUniforms = uniforms.map((u) => ({
+      slot: u.node.name,
+      type: wgslTypeName(u.node._t),
+    }));
+    const layout = wgslUniformLayout(declaredUniforms);
+
+    const vertexModule = device.createShaderModule({
+      code: compileWGSL.vertex(program.vertexRoot, { uniforms: declaredUniforms }),
+    });
+    const fragmentModule = device.createShaderModule({
+      code: compileWGSL.fragment(program.fragmentRoot, { uniforms: declaredUniforms }),
+    });
     const layoutMembers = layout.members.map((m) => ({ name: m.name, offset: m.offset }));
 
     const slotSize = Math.max(256, Math.ceil(layout.size / 256) * 256);
@@ -298,31 +323,39 @@ export class WebGPURenderer {
       .filter((s) => !isIntegerSampler(s.type))
       .map((s, i) => ({ name: s.name, binding: i }));
 
-    const bindGroupLayoutEntries: GPUBindGroupLayoutEntry[] = [{
-      binding: 0,
-      visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-      buffer: { type: "uniform", hasDynamicOffset: true },
-    }];
-    for (const t of textureBindings) {
-      bindGroupLayoutEntries.push({
+    // One layout per group, in the groups the WGSL declares: the uniform
+    // buffer alone in group 0, the textures in group 1, the samplers in group
+    // 2. Numbering them all into one group would leave several bindings
+    // claiming binding 0 and a pipeline layout that reaches neither of the
+    // groups the shader reads.
+    const uniformLayout = device.createBindGroupLayout({
+      entries: [{
+        binding: 0,
+        visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+        buffer: { type: "uniform", hasDynamicOffset: true },
+      }],
+    });
+    const textureLayout = textureBindings.length === 0 ? null : device.createBindGroupLayout({
+      entries: textureBindings.map((t) => ({
         binding: t.binding,
         visibility: GPUShaderStage.FRAGMENT,
         texture: {
           sampleType: samplerSampleType(t.type),
           viewDimension: samplerDimension(t.type),
         },
-      });
-    }
-    for (const s of samplerBindings) {
-      bindGroupLayoutEntries.push({
+      })),
+    });
+    const samplerLayout = samplerBindings.length === 0 ? null : device.createBindGroupLayout({
+      entries: samplerBindings.map((s) => ({
         binding: s.binding,
         visibility: GPUShaderStage.FRAGMENT,
         sampler: { type: "filtering" },
-      });
-    }
-
-    const bindGroupLayout = device.createBindGroupLayout({ entries: bindGroupLayoutEntries });
-    const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
+      })),
+    });
+    const groupLayouts = [uniformLayout];
+    if (textureLayout) groupLayouts.push(textureLayout);
+    if (samplerLayout) groupLayouts.push(samplerLayout);
+    const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: groupLayouts });
 
     // The vertex buffer layout: one slot per shader attribute, in the same
     // order the WGSL `VertexInput` struct numbers its `@location`s (and with
@@ -384,8 +417,13 @@ export class WebGPURenderer {
     const built: PipelineEntry = {
       program,
       pipeline,
-      bindGroup: null,
-      bindGroupLayout,
+      bindGroup: device.createBindGroup({
+        layout: uniformLayout,
+        entries: [{ binding: 0, resource: { buffer: ringBuffer, offset: 0, size: slotSize } }],
+      }),
+      textureBindGroup: null,
+      samplerBindGroup: null,
+      bindGroupLayouts: { uniforms: uniformLayout, textures: textureLayout, samplers: samplerLayout },
       textureBindings,
       samplerBindings,
       ringBuffer,
@@ -394,7 +432,7 @@ export class WebGPURenderer {
       layoutMembers,
       vertexFormats,
     };
-    built.bindGroup = this.createBindGroup(built);
+    this.bindTextures(built);
     if (!bySignature) {
       bySignature = new Map();
       this.pipelines.set(material, bySignature);
@@ -405,28 +443,39 @@ export class WebGPURenderer {
   }
 
   /**
-   * The bind group a draw with this pipeline sets: the uniform ring buffer at
-   * binding 0, then a view per texture binding and a sampler per filterable
-   * one, in the numbering the compiled WGSL declares.
+   * Fill in this entry's texture and sampler groups, if it is missing them: a
+   * view per texture binding, and a sampler per filterable one, in the
+   * numbering the compiled WGSL declares.
    *
-   * It is built apart from the pipeline because a texture can be disposed
-   * under a pipeline that outlives it, and the group — not the pipeline — is
-   * what holds the view of the texture that went away.
+   * They are built apart from the pipeline because a texture can be disposed
+   * under a pipeline that outlives it, and a group — not the pipeline — is what
+   * holds the view of the texture that went away.
    */
-  private createBindGroup(entry: PipelineEntry): GPUBindGroup {
-    const resources: GPUBindGroupEntry[] = [{
-      binding: 0,
-      resource: { buffer: entry.ringBuffer, offset: 0, size: entry.slotSize },
-    }];
-    for (const t of entry.textureBindings) {
-      const sampler = entry.program.samplers.find((s) => s.name === t.name)!;
-      resources.push({ binding: t.binding, resource: this.ensureGpuTexture(sampler.texture(), t.type).createView() });
+  private bindTextures(entry: PipelineEntry): void {
+    const { textures, samplers } = entry.bindGroupLayouts;
+    if (textures && !entry.textureBindGroup) {
+      entry.textureBindGroup = this.device.createBindGroup({
+        layout: textures,
+        entries: entry.textureBindings.map((t) => ({
+          binding: t.binding,
+          resource: this.ensureGpuTexture(this.samplerBinding(entry, t.name).texture(), t.type).createView(),
+        })),
+      });
     }
-    for (const s of entry.samplerBindings) {
-      const sampler = entry.program.samplers.find((x) => x.name === s.name)!;
-      resources.push({ binding: s.binding, resource: this.ensureSampler(sampler.texture(), sampler.type) });
+    if (samplers && !entry.samplerBindGroup) {
+      entry.samplerBindGroup = this.device.createBindGroup({
+        layout: samplers,
+        entries: entry.samplerBindings.map((s) => {
+          const binding = this.samplerBinding(entry, s.name);
+          return { binding: s.binding, resource: this.ensureSampler(binding.texture(), binding.type) };
+        }),
+      });
     }
-    return this.device.createBindGroup({ layout: entry.bindGroupLayout, entries: resources });
+  }
+
+  /** The program's sampler of that name — what a binding number stands for. */
+  private samplerBinding(entry: PipelineEntry, name: string) {
+    return entry.program.samplers.find((s) => s.name === name)!;
   }
 
   /**
@@ -478,7 +527,9 @@ export class WebGPURenderer {
   private invalidateBindGroups(texture: Texture): void {
     for (const bySignature of this.pipelines.values()) {
       for (const entry of bySignature.values()) {
-        if (entry.program.samplers.some((s) => s.texture() === texture)) entry.bindGroup = null;
+        if (!entry.program.samplers.some((s) => s.texture() === texture)) continue;
+        entry.textureBindGroup = null;
+        entry.samplerBindGroup = null;
       }
     }
   }

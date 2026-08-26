@@ -151,7 +151,7 @@ describe("WebGPURenderer samplers", () => {
     const material = texturedMaterial(texture);
     const scene = new Scene();
     const entry = renderer.ensurePipeline(material, scene, false, false);
-    const first = entry.bindGroup;
+    const first = entry.samplerBindGroup;
 
     texture.wrapS = RepeatWrapping;
     texture.needsUpdate = true;
@@ -159,7 +159,7 @@ describe("WebGPURenderer samplers", () => {
 
     // The bind group held the clamping sampler, so it cannot stand.
     expect(samplers).toHaveLength(2);
-    expect(again.bindGroup).not.toBe(first);
+    expect(again.samplerBindGroup).not.toBe(first);
   });
 
   it("leaves the bind group alone when an update changes nothing about sampling", () => {
@@ -169,14 +169,14 @@ describe("WebGPURenderer samplers", () => {
     const material = texturedMaterial(texture);
     const scene = new Scene();
     const entry = renderer.ensurePipeline(material, scene, false, false);
-    const first = entry.bindGroup;
+    const first = entry.samplerBindGroup;
 
     texture.image = new Uint8Array([220, 0, 0, 255]);
     texture.needsUpdate = true;
     const again = renderer.ensurePipeline(material, scene, false, false);
 
     expect(samplers).toHaveLength(1);
-    expect(again.bindGroup).toBe(first);
+    expect(again.samplerBindGroup).toBe(first);
   });
 });
 
@@ -191,6 +191,7 @@ describe("WebGPURenderer texture updates", () => {
     const entry = renderer.ensurePipeline(material, scene, false, false);
     expect(writes).toHaveLength(1);
     expect(texture.needsUpdate).toBe(false);
+    const boundTexture = entry.textureBindGroup;
 
     texture.image = new Uint8Array([220, 0, 0, 255]);
     texture.needsUpdate = true;
@@ -202,8 +203,7 @@ describe("WebGPURenderer texture updates", () => {
     // was created and the bind group still holds.
     expect(writes[1].texture).toBe(textures[0]);
     expect(textures).toHaveLength(1);
-    expect(bindGroups).toHaveLength(1);
-    expect(entry.bindGroup).toBe(bindGroups[0]);
+    expect(entry.textureBindGroup).toBe(boundTexture);
   });
 
   it("leaves an unchanged texture alone", () => {
@@ -226,7 +226,7 @@ describe("WebGPURenderer texture updates", () => {
     const scene = new Scene();
 
     const entry = renderer.ensurePipeline(material, scene, false, false);
-    const first = entry.bindGroup;
+    const first = entry.textureBindGroup;
 
     texture.image = new Uint8Array(2 * 2 * 4).fill(220);
     texture.width = 2;
@@ -241,8 +241,7 @@ describe("WebGPURenderer texture updates", () => {
     expect(textures[1].width).toBe(2);
     expect(writes[1].texture).toBe(textures[1]);
     expect(renderer.textures.get(texture)).toBe(textures[1]);
-    expect(again.bindGroup).not.toBe(first);
-    expect(bindGroups).toHaveLength(2);
+    expect(again.textureBindGroup).not.toBe(first);
   });
 });
 
@@ -256,8 +255,9 @@ describe("WebGPURenderer texture disposal", () => {
 
     const entry = renderer.ensurePipeline(material, scene, false, false);
     expect(textures).toHaveLength(1);
-    expect(bindGroups).toHaveLength(1);
-    const first = entry.bindGroup;
+    // One group per kind: the uniform buffer, the texture, the sampler.
+    expect(bindGroups).toHaveLength(3);
+    const first = entry.textureBindGroup;
 
     texture.dispose();
     expect(textures[0].destroyed).toBe(true);
@@ -266,16 +266,18 @@ describe("WebGPURenderer texture disposal", () => {
     // way, so it stays; what goes is this texture's claim on one.
     expect(renderer.samplerKeys.size).toBe(0);
     // The group still holding a view of the destroyed texture is gone, so no
-    // draw can reach it.
-    expect(entry.bindGroup).toBe(null);
+    // draw can reach it. The uniform group holds nothing of the texture and
+    // stays as it was.
+    expect(entry.textureBindGroup).toBe(null);
+    expect(entry.samplerBindGroup).toBe(null);
+    expect(entry.bindGroup).not.toBe(null);
 
     // Looking the pipeline up again re-uploads the texture and binds it anew,
     // without recompiling the shaders.
     const again = renderer.ensurePipeline(material, scene, false, false);
     expect(again).toBe(entry);
     expect(textures).toHaveLength(2);
-    expect(bindGroups).toHaveLength(2);
-    expect(again.bindGroup).not.toBe(first);
+    expect(again.textureBindGroup).not.toBe(first);
     expect(renderer.textures.get(texture)).toBe(textures[1]);
   });
 
@@ -286,10 +288,10 @@ describe("WebGPURenderer texture disposal", () => {
     const unused = new DataTexture(new Uint8Array([220, 0, 0, 255]), 1, 1);
     const scene = new Scene();
     const entry = renderer.ensurePipeline(texturedMaterial(used), scene, false, false);
-    const bindGroup = entry.bindGroup;
+    const bindGroup = entry.textureBindGroup;
 
     unused.dispose();
-    expect(entry.bindGroup).toBe(bindGroup);
+    expect(entry.textureBindGroup).toBe(bindGroup);
   });
 
   it("stops listening to the textures it frees when the renderer is disposed", () => {

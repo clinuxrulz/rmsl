@@ -14,6 +14,17 @@
 
 declare const process: { env: Record<string, string | undefined> };
 
+/** The little of Node's HTTP server this uses. */
+interface HttpServer {
+  listen(port: number, host: string, onListening: () => void): void;
+  address(): { port: number };
+  close(): void;
+}
+
+let webgpuBrowserPromise: Promise<any> | undefined;
+let webgpuPagePromise: Promise<any> | undefined;
+let originPromise: Promise<{ url: string; close: () => void }> | undefined;
+
 let browserPromise: Promise<any> | undefined;
 let pagePromise: Promise<any> | undefined;
 let devicePromise: Promise<any> | undefined;
@@ -42,6 +53,76 @@ export function gpuPage(): Promise<any> {
     return page;
   })();
   return pagePromise;
+}
+
+/**
+ * A browser that can run WebGPU, which is not the one the GLSL harness uses.
+ *
+ * Two things kept WebGPU out of reach here, neither of them a missing flag.
+ * Playwright's default browser is the headless *shell*, which exposes
+ * `navigator.gpu` but has no adapter behind it, so the full Chromium build has
+ * to be asked for by channel. And the SwiftShader arguments the GLSL browser
+ * needs take the WebGPU adapter away, so the two cannot share one browser.
+ */
+export function webgpuBrowser(): Promise<any> {
+  webgpuBrowserPromise ??= (async () => {
+    const { chromium } = await import("playwright");
+    return chromium.launch({ channel: "chromium" });
+  })();
+  return webgpuBrowserPromise;
+}
+
+/**
+ * A page served over `http://127.0.0.1`, because `navigator.gpu` is exposed
+ * only to a secure context and `about:blank` — what the GLSL harness uses — is
+ * not one. Localhost counts as secure, so a socket on the loopback interface is
+ * the whole trick; no certificate is involved.
+ */
+function testOrigin(): Promise<{ url: string; close: () => void }> {
+  originPromise ??= (async () => {
+    // The project carries no Node type definitions — see the `process`
+    // declaration above — so the module is reached through a specifier TypeScript
+    // does not try to resolve, and what is used of it is described inline.
+    const http = await import("node:http" as string) as {
+      createServer(handler: (request: unknown, response: any) => void): HttpServer;
+    };
+    const server = http.createServer((_request: unknown, response: any) => {
+      response.writeHead(200, { "Content-Type": "text/html" });
+      response.end("<!doctype html><title>rmsl</title>");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    return { url: `http://127.0.0.1:${port}/`, close: () => server.close() };
+  })();
+  return originPromise;
+}
+
+/** One page with a WebGPU-capable context, shared for the whole run. */
+export function webgpuPage(): Promise<any> {
+  webgpuPagePromise ??= (async () => {
+    const [browser, origin] = await Promise.all([webgpuBrowser(), testOrigin()]);
+    const page = await browser.newPage();
+    await page.goto(origin.url);
+    return page;
+  })();
+  return webgpuPagePromise;
+}
+
+/**
+ * Whether that browser has a WebGPU adapter to give — a machine or a build
+ * without one leaves the tests that draw through it skipped rather than failed.
+ */
+export async function webgpuAvailable(): Promise<boolean> {
+  if (!GPU_ENABLED) return false;
+  try {
+    const page = await webgpuPage();
+    return await page.evaluate(async () => {
+      if (!navigator.gpu) return false;
+      return (await navigator.gpu.requestAdapter()) !== null;
+    });
+  } catch {
+    return false;
+  }
 }
 
 /** A WebGPU device, for handing WGSL to Dawn. */
@@ -101,10 +182,18 @@ export async function releaseGpu(): Promise<void> {
   const page = pagePromise;
   const browser = browserPromise;
   const device = devicePromise;
+  const gpuPageHandle = webgpuPagePromise;
+  const gpuBrowserHandle = webgpuBrowserPromise;
+  const origin = originPromise;
   pagePromise = browserPromise = devicePromise = undefined;
+  webgpuPagePromise = webgpuBrowserPromise = originPromise = undefined;
 
   if (page) await (await page).close().catch(() => {});
   if (browser) await (await browser).close().catch(() => {});
+  if (gpuPageHandle) await (await gpuPageHandle).close().catch(() => {});
+  if (gpuBrowserHandle) await (await gpuBrowserHandle).close().catch(() => {});
+  // A listening socket keeps the process alive on its own.
+  if (origin) (await origin).close();
   // The device holds native resources, so it is released rather than left for
   // the process to clean up.
   if (device) (await device).destroy?.();
