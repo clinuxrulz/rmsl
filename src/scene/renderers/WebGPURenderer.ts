@@ -12,6 +12,7 @@ import type { Texture } from "../textures/Texture";
 import { DataTexture } from "../textures/DataTexture";
 import { RedIntegerFormat } from "../textures/constants";
 import type { NodeMaterial, MaterialProgram } from "../materials/NodeMaterial";
+import type { SamplerShaderType } from "../materials/nodes/Builder";
 import { Side } from "../materials/Material";
 import {
   cameraUniformValue, isIntegerSampler, objectUniformValue, lightsSignature,
@@ -22,7 +23,16 @@ import {
 interface PipelineEntry {
   program: MaterialProgram;
   pipeline: GPURenderPipeline;
-  bindGroup: GPUBindGroup;
+  /**
+   * Null once a texture this entry binds has been disposed — the group holds a
+   * view of a destroyed texture, so `ensurePipeline` builds a new one before
+   * the next draw.
+   */
+  bindGroup: GPUBindGroup | null;
+  bindGroupLayout: GPUBindGroupLayout;
+  /** One entry per texture binding, and per sampler binding, of the group. */
+  textureBindings: { name: string; type: SamplerShaderType; binding: number }[];
+  samplerBindings: { name: string; binding: number }[];
   /** Ring of uniform slots so per-draw writes never race the previous draw. */
   ringBuffer: GPUBuffer;
   slotSize: number;
@@ -181,7 +191,7 @@ export class WebGPURenderer {
       firstPass = false;
 
       pass.setPipeline(entry.pipeline);
-      pass.setBindGroup(0, entry.bindGroup, [slotIndex * entry.slotSize]);
+      pass.setBindGroup(0, entry.bindGroup!, [slotIndex * entry.slotSize]);
       this.setVertexBuffers(pass, entry, mesh);
 
       const geometry = mesh.geometry;
@@ -238,6 +248,9 @@ export class WebGPURenderer {
     let bySignature = this.pipelines.get(material);
     const entry = bySignature?.get(signature);
     if (entry && !material.needsUpdate) {
+      // A texture disposed since the last draw took this entry's bind group
+      // with it; rebuild it from the textures the material points at now.
+      entry.bindGroup ??= this.createBindGroup(entry);
       return entry;
     }
 
@@ -302,20 +315,6 @@ export class WebGPURenderer {
     const bindGroupLayout = device.createBindGroupLayout({ entries: bindGroupLayoutEntries });
     const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
 
-    const bindGroupResources: GPUBindGroupEntry[] = [{
-      binding: 0,
-      resource: { buffer: ringBuffer, offset: 0, size: slotSize },
-    }];
-    for (const t of textureBindings) {
-      const sampler = program.samplers.find((s) => s.name === t.name)!;
-      bindGroupResources.push({ binding: t.binding, resource: this.ensureGpuTexture(sampler.texture(), t.type).view });
-    }
-    for (const s of samplerBindings) {
-      const sampler = program.samplers.find((x) => x.name === s.name)!;
-      bindGroupResources.push({ binding: s.binding, resource: this.ensureSampler(sampler.texture()) });
-    }
-    const bindGroup = device.createBindGroup({ layout: bindGroupLayout, entries: bindGroupResources });
-
     // The vertex buffer layout: one slot per shader attribute, in the same
     // order the WGSL `VertexInput` struct numbers its `@location`s (and with
     // the same spacing — a mat4 attribute spans four consecutive locations).
@@ -376,13 +375,17 @@ export class WebGPURenderer {
     const built: PipelineEntry = {
       program,
       pipeline,
-      bindGroup,
+      bindGroup: null,
+      bindGroupLayout,
+      textureBindings,
+      samplerBindings,
       ringBuffer,
       slotSize,
       slots,
       layoutMembers,
       vertexFormats,
     };
+    built.bindGroup = this.createBindGroup(built);
     if (!bySignature) {
       bySignature = new Map();
       this.pipelines.set(material, bySignature);
@@ -391,6 +394,51 @@ export class WebGPURenderer {
     material.needsUpdate = false;
     return built;
   }
+
+  /**
+   * The bind group a draw with this pipeline sets: the uniform ring buffer at
+   * binding 0, then a view per texture binding and a sampler per filterable
+   * one, in the numbering the compiled WGSL declares.
+   *
+   * It is built apart from the pipeline because a texture can be disposed
+   * under a pipeline that outlives it, and the group — not the pipeline — is
+   * what holds the view of the texture that went away.
+   */
+  private createBindGroup(entry: PipelineEntry): GPUBindGroup {
+    const resources: GPUBindGroupEntry[] = [{
+      binding: 0,
+      resource: { buffer: entry.ringBuffer, offset: 0, size: entry.slotSize },
+    }];
+    for (const t of entry.textureBindings) {
+      const sampler = entry.program.samplers.find((s) => s.name === t.name)!;
+      resources.push({ binding: t.binding, resource: this.ensureGpuTexture(sampler.texture(), t.type).view });
+    }
+    for (const s of entry.samplerBindings) {
+      const sampler = entry.program.samplers.find((x) => x.name === s.name)!;
+      resources.push({ binding: s.binding, resource: this.ensureSampler(sampler.texture()) });
+    }
+    return this.device.createBindGroup({ layout: entry.bindGroupLayout, entries: resources });
+  }
+
+  /**
+   * Destroy the GPU texture a disposed `Texture` owns, drop its sampler, and
+   * stop listening to it. Every bind group that binds it is dropped too, since
+   * a bind group holding a view of a destroyed texture cannot be drawn with;
+   * `ensurePipeline` builds a replacement, which re-uploads the image if the
+   * material still points at the texture.
+   */
+  private onTextureDispose = (event: unknown): void => {
+    const texture = (event as { target: Texture }).target;
+    this.textures.get(texture)?.destroy();
+    this.textures.delete(texture);
+    this.samplers.delete(texture);
+    texture.removeEventListener("dispose", this.onTextureDispose);
+    for (const bySignature of this.pipelines.values()) {
+      for (const entry of bySignature.values()) {
+        if (entry.program.samplers.some((s) => s.texture() === texture)) entry.bindGroup = null;
+      }
+    }
+  };
 
   private ensureGeometryBuffers(geometry: BufferGeometry): GeometryBuffers {
     let buffers = this.geometryBuffers.get(geometry);
@@ -489,6 +537,7 @@ export class WebGPURenderer {
           usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
         });
         this.textures.set(t, gpu);
+        t.addEventListener("dispose", this.onTextureDispose);
       }
       if (ArrayBuffer.isView(t.image)) {
         this.writeTexture(gpu, t.image as unknown as ArrayBufferView<ArrayBuffer>, width, height, depth, format);
@@ -595,7 +644,10 @@ export class WebGPURenderer {
       buffers.index?.destroy();
     }
     for (const buffer of this.attributeBuffers.values()) buffer.destroy();
-    for (const texture of this.textures.values()) texture.destroy();
+    for (const [texture, gpu] of this.textures) {
+      gpu.destroy();
+      texture.removeEventListener("dispose", this.onTextureDispose);
+    }
     this.depthTexture?.destroy();
     this.pipelines.clear();
     this.geometryBuffers.clear();

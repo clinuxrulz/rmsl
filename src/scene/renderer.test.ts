@@ -234,6 +234,48 @@ globalThis.__rmslPrecisionRun = () => {
 };
 `;
 
+// Disposing a texture must free the GL texture the renderer made for it, and
+// leave the texture itself usable: the second render re-creates and re-uploads
+// it, so the blue texel still reaches the color target.
+const ENTRY_TEXTURE_DISPOSE = `
+import { WebGLRenderer, Scene, Mesh, PerspectiveCamera, PlaneGeometry,
+  MeshBasicMaterial, DataTexture } from "./index";
+import { vec2 } from "../rmsl";
+globalThis.__rmslTextureDisposeRun = () => {
+  const canvas = document.createElement("canvas");
+  canvas.width = 16;
+  canvas.height = 16;
+  const renderer = new WebGLRenderer(canvas, { antialias: false });
+  renderer.setClearColor(0x000000);
+  const scene = new Scene();
+  const texture = new DataTexture(new Uint8Array([0, 0, 220, 255]), 1, 1);
+  const material = new MeshBasicMaterial();
+  material.fragmentNode = (b) => b.sampler("map", () => texture).texture(vec2(0.5, 0.5));
+  const mesh = new Mesh(new PlaneGeometry(2, 2), material);
+  scene.add(mesh);
+  const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+  camera.position.set(0, 0, 1);
+  camera.lookAt(0, 0, 0);
+  renderer.render(scene, camera);
+
+  const gl = renderer.gl;
+  const glTexture = renderer.textures.get(texture);
+  const liveBefore = gl.isTexture(glTexture);
+  texture.dispose();
+  const liveAfter = gl.isTexture(glTexture);
+  const trackedAfter = renderer.textures.size;
+
+  renderer.render(scene, camera);
+  const pixels = new Uint8Array(4);
+  gl.readPixels(8, 8, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  return {
+    liveBefore, liveAfter, trackedAfter,
+    trackedAgain: renderer.textures.size,
+    b: pixels[2], error: gl.getError(),
+  };
+};
+`;
+
 async function bundleEntry(source: string): Promise<string> {
   const result = await build({
     stdin: {
@@ -354,6 +396,25 @@ describe.skipIf(!GPU_ENABLED)("WebGLRenderer", () => {
     expect(pixel.g).toBeGreaterThan(100);
     expect(pixel.g).toBeLessThan(140);
     expect(pixel.b).toBeGreaterThan(200);
+  }, 60_000);
+
+  it("frees a disposed texture and re-uploads it on the next render", async () => {
+    const page = await gpuPage();
+    const code = await bundleEntry(ENTRY_TEXTURE_DISPOSE);
+    const result = await page.evaluate(async (source: string) => {
+      // eslint-disable-next-line no-new-func
+      const fn = new Function(source);
+      fn();
+      return (globalThis as any).__rmslTextureDisposeRun();
+    }, code);
+
+    expect(result.liveBefore).toBe(true);
+    expect(result.liveAfter).toBe(false);
+    expect(result.trackedAfter).toBe(0);
+    // The next render made a new GL texture for the same Texture object.
+    expect(result.trackedAgain).toBe(1);
+    expect(result.b).toBeGreaterThan(150);
+    expect(result.error).toBe(0);
   }, 60_000);
 
   it("renders with lowered precision from the renderer and a material override", async () => {

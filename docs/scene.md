@@ -44,7 +44,7 @@ renderer.setAnimationLoop(() => renderer.render(scene, camera));
 - **Math** — `Vector2/3/4`, `Matrix3/4`, `Quaternion`, `Euler`, `Color`,
   `Spherical`, `MathUtils`, all in the column-major `number[]`/`Float32Array`
   convention the rest of the library already uses.
-- **Textures** — `Texture`, `DataTexture`.
+- **Textures** — `Texture`, `DataTexture` (see [Texture lifetime](#texture-lifetime)).
 - **Renderers** — `WebGLRenderer` (WebGL2) and `WebGPURenderer` (WebGPU).
 
 ## Node-based materials
@@ -132,6 +132,25 @@ uniforms are uploaded per draw, grouped by scope:
 `await WebGPURenderer.init(canvas?)`. Same API. Uniform values are packed into
 per-program ring buffers using the same layout the WGSL compiler emits, so
 per-draw writes never race the previous draw.
+
+### Texture lifetime
+
+A renderer creates the GPU texture behind a `Texture` the first time it draws
+with it and holds on to it from then on. `texture.dispose()` gives it back:
+
+```typescript
+const texture = new DataTexture(pixels, 256, 256);
+// ... draw with it ...
+texture.dispose(); // every renderer that uploaded it frees its copy
+```
+
+`dispose()` dispatches a `dispose` event, and each renderer that uploaded the
+texture deletes its own GPU object — so a texture shared by a WebGL and a
+WebGPU renderer frees both. The `Texture` object stays usable afterwards:
+drawing with it again uploads the image to a fresh GPU texture. Use it for a
+texture that drops out of a scene — an atlas swapped for another, a layer torn
+down — rather than waiting for `renderer.dispose()`, which frees everything the
+renderer holds at once.
 
 ### Lights
 

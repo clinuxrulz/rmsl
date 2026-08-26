@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   Scene, Group, Mesh, PerspectiveCamera, OrthographicCamera,
   AmbientLight, DirectionalLight, PointLight,
-  BufferGeometry, BufferAttribute,
+  BufferGeometry, BufferAttribute, DataTexture, Texture,
   Vector3, Quaternion, Matrix4, Color, degToRad,
 } from "./index";
 
@@ -179,5 +179,34 @@ describe("BufferGeometry", () => {
     expect(geo.attributes.position?.count).toBe(2);
     expect(geo.index?.count).toBe(2);
     expect(geo.drawCount).toBe(2);
+  });
+});
+
+describe("Texture", () => {
+  it("tells its listeners which texture was disposed", () => {
+    const texture = new Texture();
+    const disposed: unknown[] = [];
+    texture.addEventListener("dispose", (event) => {
+      disposed.push((event as { target: unknown }).target);
+    });
+    texture.dispose();
+    expect(disposed).toEqual([texture]);
+  });
+
+  it("notifies every listener, so two renderers each free their own copy", () => {
+    const texture = new DataTexture(new Uint8Array([1, 2, 3, 4]), 1, 1);
+    let count = 0;
+    const first = (): void => { count++; };
+    const second = (): void => { count++; };
+    texture.addEventListener("dispose", first);
+    texture.addEventListener("dispose", second);
+    texture.dispose();
+    expect(count).toBe(2);
+
+    // A listener that has unsubscribed — as a renderer does once it has freed
+    // its texture — hears nothing from a second dispose.
+    texture.removeEventListener("dispose", first);
+    texture.dispose();
+    expect(count).toBe(3);
   });
 });

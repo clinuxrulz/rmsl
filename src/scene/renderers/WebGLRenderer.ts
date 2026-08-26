@@ -268,6 +268,7 @@ export class WebGLRenderer {
       if (!glTexture) {
         glTexture = gl.createTexture()!;
         this.textures.set(texture, glTexture);
+        texture.addEventListener("dispose", this.onTextureDispose);
       }
       gl.bindTexture(target, glTexture);
       gl.texParameteri(target, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -304,6 +305,19 @@ export class WebGLRenderer {
     gl.bindTexture(target, glTexture);
     return unit;
   }
+
+  /**
+   * Free the GL texture a disposed `Texture` owns, and stop listening to it.
+   * Drawing with the texture again is allowed: `bindTexture` finds no GL
+   * texture for it and creates and uploads a new one.
+   */
+  private onTextureDispose = (event: unknown): void => {
+    const texture = (event as { target: Texture }).target;
+    const glTexture = this.textures.get(texture);
+    if (glTexture) this.gl.deleteTexture(glTexture);
+    this.textures.delete(texture);
+    texture.removeEventListener("dispose", this.onTextureDispose);
+  };
 
   private nextTextureUnit(): number {
     const gl = this.gl;
@@ -452,7 +466,10 @@ export class WebGLRenderer {
       if (buffers.index) gl.deleteBuffer(buffers.index);
     }
     for (const buffer of this.attributeBuffers.values()) gl.deleteBuffer(buffer);
-    for (const texture of this.textures.values()) gl.deleteTexture(texture);
+    for (const [texture, glTexture] of this.textures) {
+      gl.deleteTexture(glTexture);
+      texture.removeEventListener("dispose", this.onTextureDispose);
+    }
     this.programs.clear();
     this.geometryBuffers.clear();
     this.attributeBuffers.clear();
