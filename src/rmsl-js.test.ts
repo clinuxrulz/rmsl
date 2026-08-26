@@ -28,7 +28,7 @@ import {
   builtinFragDepth, Discard, ivec2,
   mul, add, sub, sin, mix, clamp, step, smoothstep, dot, cross,
   normalize, length, distance, reflect, refract, faceForward,
-  atan, inverseSqrt, all, any, min, max, pow,
+  atan, inverseSqrt, all, any, min, max, pow, textureLoad,
   type Node,
 } from "./rmsl";
 
@@ -567,6 +567,61 @@ describe("JS backend: CPU-specific behaviour", () => {
     // 2x2 RGBA; uv (0.5, 0.5) -> texel (1, 1).
     const data = [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4];
     expect(fn({ textures: { [tex.name]: { data, width: 2, height: 2 } } })).toEqual([4, 4, 4, 4]);
+  });
+
+  it("reads a byte texture through a float sampler as 0 to 1", () => {
+    let tex!: any;
+    const prog = Fn(() => {
+      tex = uniform("sampler2D");
+      return tex.texture(vec2(0.5, 0.5));
+    })();
+    const fn = compileJS(() => prog, { name: "main", params: [] });
+    // What a DataTexture holds: 8-bit channels. Both backends upload that as a
+    // normalized format, so the shader reads 0..1 — and so must this.
+    const data = new Uint8Array([0, 128, 255, 255]);
+    expect(fn({ textures: { [tex.name]: { data, width: 1, height: 1 } } }))
+      .toEqual([0, 128 / 255, 1, 1]);
+  });
+
+  it("leaves a float texture that already holds float data alone", () => {
+    let tex!: any;
+    const prog = Fn(() => {
+      tex = uniform("sampler2D");
+      return tex.texture(vec2(0.5, 0.5));
+    })();
+    const fn = compileJS(() => prog, { name: "main", params: [] });
+    const data = new Float32Array([0, 0.5, 1, 1]);
+    expect(fn({ textures: { [tex.name]: { data, width: 1, height: 1 } } }))
+      .toEqual([0, 0.5, 1, 1]);
+    // A plain array is a plain array, whatever is in it.
+    expect(fn({ textures: { [tex.name]: { data: [0, 0.5, 1, 1], width: 1, height: 1 } } }))
+      .toEqual([0, 0.5, 1, 1]);
+  });
+
+  it("keeps an integer texture's bytes as the texels they are", () => {
+    let tex!: any;
+    const prog = Fn(() => {
+      tex = uniform("usampler2D");
+      return tex.texture(ivec2(0, 0));
+    })();
+    const fn = compileJS(() => prog, { name: "main", params: [] });
+    // An integer sampler fetches raw texels on a GPU too — there is no
+    // normalized format under it to undo.
+    const data = new Uint8Array([0, 128, 255, 255]);
+    expect(fn({ textures: { [tex.name]: { data, width: 1, height: 1 } } }))
+      .toEqual([0, 128, 255, 255]);
+  });
+
+  it("normalizes a byte texture fetched with textureLoad too", () => {
+    let tex!: any;
+    const prog = Fn(() => {
+      tex = uniform("sampler2D");
+      return textureLoad(tex, ivec2(0, 0));
+    })();
+    const fn = compileJS(() => prog, { name: "main", params: [] });
+    const data = new Uint8Array([0, 128, 255, 255]);
+    expect(fn({ textures: { [tex.name]: { data, width: 1, height: 1 } } }))
+      .toEqual([0, 128 / 255, 1, 1]);
   });
 
   it("fetches integer textures at texel coordinates", () => {

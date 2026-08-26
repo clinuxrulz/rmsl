@@ -249,7 +249,7 @@ let depth = r.fragDepth; // written via builtinFragDepth(), for the world pick p
 | `float`/`int`/`uint`/`bool` | number / boolean |
 | `vec2`–`vec4`, `ivecN`, `uvecN`, `bvecN` | arrays `[x, y, z]` |
 | `matCxR` | flat column-major array of numbers |
-| `sampler2D`/`sampler3D` (and integer variants) | sampled from `ctx.textures[slot]` |
+| `sampler2D`/`sampler3D` (and integer variants) | sampled from `ctx.textures[slot]` (see *Sampling*) |
 
 Vectors and matrices are plain arrays, matching the flat `Float32Array`
 conventions the apps already use.
@@ -328,6 +328,15 @@ declares the variables inside the callable instead.
 Float textures sample with nearest-neighbour lookup at normalized coordinates;
 integer textures (`isampler*`/`usampler*`) fetch at texel coordinates. The
 `textureLod` LOD argument is ignored. Data is RGBA in a flat array.
+
+**8-bit data read through a float sampler comes back as 0–1**, the way it does
+on both backends: an 8-bit texture is uploaded as a normalized format, and the
+sampler divides by 255 on the way out. Give a `Uint8Array` (or a
+`Uint8ClampedArray`) — what a `DataTexture` holds — and the CPU callable divides
+too, so the same graph produces the same value here as on screen. Data in any
+other array is taken as the value it already is, so float data passes through
+untouched. An integer sampler fetches raw texels on a GPU as well, and is left
+alone.
 
 ### Testing with it
 

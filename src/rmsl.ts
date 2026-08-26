@@ -5146,13 +5146,22 @@ function jsHelperSource(name: string): string {
     case "matDiag":
       return `function _matDiag(s, size, stride) {\n  let m = new Array(size).fill(0);\n  for (let i = 0; i < size; i += stride) m[i] = s;\n  return m;\n}`;
     case "tex2d":
-      return `function _tex2d(tex, uv, out) {\n  out = out || [0, 0, 0, 0];\n  let x = Math.max(0, Math.min(tex.width - 1, Math.floor(uv[0] * tex.width)));\n  let y = Math.max(0, Math.min(tex.height - 1, Math.floor(uv[1] * tex.height)));\n  let o = (y * tex.width + x) * 4;\n  out[0] = tex.data[o];\n  out[1] = tex.data[o + 1];\n  out[2] = tex.data[o + 2];\n  out[3] = tex.data[o + 3];\n  return out;\n}`;
+      return `function _tex2d(tex, uv, out) {\n  out = out || [0, 0, 0, 0];\n  let x = Math.max(0, Math.min(tex.width - 1, Math.floor(uv[0] * tex.width)));\n  let y = Math.max(0, Math.min(tex.height - 1, Math.floor(uv[1] * tex.height)));\n  let o = (y * tex.width + x) * 4;\n  let s = _unorm(tex);\n  out[0] = tex.data[o] / s;\n  out[1] = tex.data[o + 1] / s;\n  out[2] = tex.data[o + 2] / s;\n  out[3] = tex.data[o + 3] / s;\n  return out;\n}`;
     case "texFetch2d":
       return `function _texFetch2d(tex, uv, out) {\n  out = out || [0, 0, 0, 0];\n  let x = Math.floor(uv[0]);\n  let y = Math.floor(uv[1]);\n  if (x < 0 || y < 0 || x >= tex.width || y >= tex.height) return out;\n  let o = (y * tex.width + x) * 4;\n  out[0] = tex.data[o];\n  out[1] = tex.data[o + 1];\n  out[2] = tex.data[o + 2];\n  out[3] = tex.data[o + 3];\n  return out;\n}`;
     case "tex3d":
-      return `function _tex3d(tex, uvw, out) {\n  out = out || [0, 0, 0, 0];\n  let x = Math.max(0, Math.min(tex.width - 1, Math.floor(uvw[0] * tex.width)));\n  let y = Math.max(0, Math.min(tex.height - 1, Math.floor(uvw[1] * tex.height)));\n  let z = Math.max(0, Math.min(tex.depth - 1, Math.floor(uvw[2] * tex.depth)));\n  let o = ((z * tex.height + y) * tex.width + x) * 4;\n  out[0] = tex.data[o];\n  out[1] = tex.data[o + 1];\n  out[2] = tex.data[o + 2];\n  out[3] = tex.data[o + 3];\n  return out;\n}`;
+      return `function _tex3d(tex, uvw, out) {\n  out = out || [0, 0, 0, 0];\n  let x = Math.max(0, Math.min(tex.width - 1, Math.floor(uvw[0] * tex.width)));\n  let y = Math.max(0, Math.min(tex.height - 1, Math.floor(uvw[1] * tex.height)));\n  let z = Math.max(0, Math.min(tex.depth - 1, Math.floor(uvw[2] * tex.depth)));\n  let o = ((z * tex.height + y) * tex.width + x) * 4;\n  let s = _unorm(tex);\n  out[0] = tex.data[o] / s;\n  out[1] = tex.data[o + 1] / s;\n  out[2] = tex.data[o + 2] / s;\n  out[3] = tex.data[o + 3] / s;\n  return out;\n}`;
     case "texFetch3d":
       return `function _texFetch3d(tex, uvw, out) {\n  out = out || [0, 0, 0, 0];\n  let x = Math.floor(uvw[0]);\n  let y = Math.floor(uvw[1]);\n  let z = Math.floor(uvw[2]);\n  if (x < 0 || y < 0 || z < 0 || x >= tex.width || y >= tex.height || z >= tex.depth) return out;\n  let o = ((z * tex.height + y) * tex.width + x) * 4;\n  out[0] = tex.data[o];\n  out[1] = tex.data[o + 1];\n  out[2] = tex.data[o + 2];\n  out[3] = tex.data[o + 3];\n  return out;\n}`;
+    case "texFetchUnorm2d":
+      return `function _texFetchUnorm2d(tex, uv, out) {\n  out = out || [0, 0, 0, 0];\n  let x = Math.floor(uv[0]);\n  let y = Math.floor(uv[1]);\n  if (x < 0 || y < 0 || x >= tex.width || y >= tex.height) return out;\n  let o = (y * tex.width + x) * 4;\n  let s = _unorm(tex);\n  out[0] = tex.data[o] / s;\n  out[1] = tex.data[o + 1] / s;\n  out[2] = tex.data[o + 2] / s;\n  out[3] = tex.data[o + 3] / s;\n  return out;\n}`;
+    case "texFetchUnorm3d":
+      return `function _texFetchUnorm3d(tex, uvw, out) {\n  out = out || [0, 0, 0, 0];\n  let x = Math.floor(uvw[0]);\n  let y = Math.floor(uvw[1]);\n  let z = Math.floor(uvw[2]);\n  if (x < 0 || y < 0 || z < 0 || x >= tex.width || y >= tex.height || z >= tex.depth) return out;\n  let o = ((z * tex.height + y) * tex.width + x) * 4;\n  let s = _unorm(tex);\n  out[0] = tex.data[o] / s;\n  out[1] = tex.data[o + 1] / s;\n  out[2] = tex.data[o + 2] / s;\n  out[3] = tex.data[o + 3] / s;\n  return out;\n}`;
+    // What a float sampler divides a texel by. An 8-bit texture is uploaded to
+    // both backends as a normalized format, so the shader reads 0..1 from data
+    // stored as 0..255; anything else is taken as the value it already is.
+    case "unorm":
+      return `function _unorm(tex) {\n  let d = tex.data;\n  return (d instanceof Uint8Array || d instanceof Uint8ClampedArray) ? 255 : 1;\n}`;
     case "texSize":
       return `function _texSize(tex, out) {\n  out = out || [0, 0, 0];\n  out[0] = tex.width;\n  out[1] = tex.height;\n  if (tex.depth !== undefined) out[2] = tex.depth;\n  return out;\n}`;
     case "mat2x2inv":
@@ -5971,6 +5980,7 @@ function compileJSNode(
       let coords = jsCompileOperand(node.params![1], ctx);
       let helper = is3D ? (isInteger ? "texFetch3d" : "tex3d") : (isInteger ? "texFetch2d" : "tex2d");
       jsRequireHelper(ctx, helper);
+      if (!isInteger) jsRequireHelper(ctx, "unorm");
       if (ctx.outTarget) {
         return {
           decls: coords.decls,
@@ -5989,8 +5999,15 @@ function compileJSNode(
         throw new Error("[RMSL] The JS target supports sampler2D/sampler3D textures only.");
       }
       let is3D = samplerType.endsWith("3D");
-      let helper = is3D ? "texFetch3d" : "texFetch2d";
+      // A texel fetch through a float sampler still reads a normalized texture,
+      // as `texelFetch`/`textureLoad` do on either backend; an integer sampler
+      // has no normalization to undo.
+      let isInteger = samplerType.startsWith("isampler") || samplerType.startsWith("usampler");
+      let helper = isInteger
+        ? (is3D ? "texFetch3d" : "texFetch2d")
+        : (is3D ? "texFetchUnorm3d" : "texFetchUnorm2d");
       jsRequireHelper(ctx, helper);
+      if (!isInteger) jsRequireHelper(ctx, "unorm");
       let texRef = `ctx.textures[${JSON.stringify(slot)}]`;
       let coords = jsCompileOperand(node.params![1], ctx);
       if (ctx.outTarget) {

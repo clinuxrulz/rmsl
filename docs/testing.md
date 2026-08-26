@@ -209,15 +209,6 @@ it with `uniformsIn(pass.color, "vec2")`.
 The program is taken by shape, not by import, so nothing here drags the scene
 graph or the effects into a test that only wanted a shader.
 
-### Byte textures
-
-An 8-bit texture holds 0–255, and a float sampler on a GPU reads it back as
-0–1. That scaling belongs to the sampler, which the CPU has none of, so bytes
-bound to a float sampler are scaled here to match what a renderer would show —
-through a 32-bit float, as the hardware does. An integer sampler fetches raw
-texels on a GPU too and is left alone. Pass `{ bytes: "raw" }` to see the stored
-values instead.
-
 ## Comparing values
 
 Shader arithmetic is not reproduced exactly by the arithmetic a test writes out
@@ -257,7 +248,9 @@ is what went unbound.
   they read as zero here and an anti-aliased edge reads as a hard one. Pass
   `{ derivatives: "throw" }` to be told rather than quietly given zero.
 - **Sampling is nearest-neighbour**, and `textureLod`'s level is ignored. A
-  bilinear filter is a property of the sampler hardware, not of the graph.
+  bilinear filter is a property of the sampler hardware, not of the graph. The
+  0–255 an 8-bit texture holds does read back as the 0–1 a float sampler gives
+  a shader, so a textured material measures here as it looks on screen.
 - **The CPU computes f64, a GPU f32.** Results can differ in the last bits,
   which is what the tolerance is for. A test that must pin f32 behaviour still
   belongs on a device.

@@ -98,12 +98,6 @@ export interface RunnerOptions extends ShaderInputs {
   derivatives?: "zero" | "throw";
   /** Give each call its own scratch variables. Default `false`. */
   reentrant?: boolean;
-  /**
-   * What an 8-bit texture bound to a float sampler holds. `"normalize"` (the
-   * default) scales it to 0–1, as a GPU's sampler does; `"raw"` keeps the
-   * stored 0–255.
-   */
-  bytes?: "normalize" | "raw";
 }
 
 /** What a shader produced for one fragment. */
@@ -159,8 +153,6 @@ interface NameMaps {
   varyings?: Map<string, string>;
   attributes?: Map<string, string>;
   textures?: Map<string, string>;
-  /** Which sampler type each texture slot is declared as, by slot. */
-  samplerTypes?: Map<string, string>;
 }
 
 /** `runner`, plus the names a program brings with it. */
@@ -442,11 +434,6 @@ export function fromProgram(program: ProgramLike, options: ProgramOptions = {}):
     varyings: slotNames(program.varyings),
     attributes: slotNames(program.attributes),
     textures: slotNames(program.samplers),
-    samplerTypes: new Map(
-      (program.samplers ?? [])
-        .filter((sampler): sampler is ProgramSampler & { type: string } => typeof sampler.type === "string")
-        .map((sampler) => [sampler.node.name, sampler.type]),
-    ),
   };
 
   const given = slots(names.uniforms, options.uniforms);
@@ -468,10 +455,7 @@ export function fromProgram(program: ProgramLike, options: ProgramOptions = {}):
   const run = compileRunner<"vec4">(() => root, {
     ...options,
     uniforms: { ...uniforms, ...given },
-    textures: {
-      ...textures,
-      ...textureSlots(names.textures, names.samplerTypes, "raw", options.textures),
-    },
+    textures: { ...textures, ...textureSlots(names.textures, options.textures) },
   }, names);
 
   return Object.defineProperties(run, {
@@ -493,13 +477,8 @@ export function fromProgram(program: ProgramLike, options: ProgramOptions = {}):
  */
 export function fromPass(pass: PassLike, options: RunnerOptions = {}): ShaderRunner<"vec4"> {
   const textures = new Map<string, string>();
-  const samplerTypes = new Map<string, string>();
-  for (const [name, node] of Object.entries(pass.inputs ?? {})) {
-    textures.set(name, node.name);
-    const type = (node as { _t?: string })._t;
-    if (type) samplerTypes.set(node.name, type);
-  }
-  return compileRunner<"vec4">(() => pass.color, options, { textures, samplerTypes });
+  for (const [name, node] of Object.entries(pass.inputs ?? {})) textures.set(name, node.name);
+  return compileRunner<"vec4">(() => pass.color, options, { textures });
 }
 
 /** Which slot each of a program's names points at. */
@@ -685,7 +664,7 @@ function asRunner<A extends ShaderType>(
 
 /** Slot-keyed context for the compiled callable, defaults under the call's own. */
 function mergeContext(
-  defaults: RunnerOptions,
+  defaults: ShaderInputs,
   inputs: ShaderInputs,
   names?: NameMaps,
 ): JsShaderContext {
@@ -693,10 +672,7 @@ function mergeContext(
     uniforms: slots(names?.uniforms, defaults.uniforms, inputs.uniforms),
     varyings: slots(names?.varyings, defaults.varyings, inputs.varyings),
     attributes: slots(names?.attributes, defaults.attributes, inputs.attributes),
-    textures: textureSlots(
-      names?.textures, names?.samplerTypes, defaults.bytes ?? "normalize",
-      defaults.textures, inputs.textures,
-    ),
+    textures: textureSlots(names?.textures, defaults.textures, inputs.textures),
     fragCoord: (inputs.fragCoord ?? defaults.fragCoord) as [number, number] | undefined,
   };
 }
@@ -721,51 +697,21 @@ function slots(
 
 function textureSlots(
   names: Map<string, string> | undefined,
-  samplerTypes: Map<string, string> | undefined,
-  bytes: "normalize" | "raw",
   ...given: (readonly TextureBinding[] | Record<string, TextureData> | undefined)[]
 ): Record<string, JsTextureData> {
   const record: Record<string, JsTextureData> = {};
   for (const values of given) {
     if (values === undefined) continue;
-    const pairs: [string, TextureData, string | undefined][] = Array.isArray(values)
-      ? (values as readonly TextureBinding[]).map(([node, texture]) => [node.name, texture, node._t])
-      : Object.entries(values as Record<string, TextureData>).map(([name, texture]) => [name, texture, undefined]);
-    for (const [name, texture, nodeType] of pairs) {
+    const pairs: [string, TextureData][] = Array.isArray(values)
+      ? (values as readonly TextureBinding[]).map(([node, texture]) => [node.name, texture])
+      : Object.entries(values as Record<string, TextureData>);
+    for (const [name, texture] of pairs) {
       const slot = names?.get(name) ?? name;
-      const type = nodeType ?? samplerTypes?.get(slot);
       const data = "data" in texture ? texture.data : texture.image;
-      record[slot] = {
-        data: bytes === "normalize" ? normalized(data, type) : data,
-        width: texture.width,
-        height: texture.height,
-        depth: texture.depth,
-      };
+      record[slot] = { data, width: texture.width, height: texture.height, depth: texture.depth };
     }
   }
   return record;
-}
-
-/** Byte textures already turned into the 0–1 values a float sampler reads. */
-const NORMALIZED = new WeakMap<object, Float32Array>();
-
-/**
- * An 8-bit texture holds 0–255, and a float sampler on a GPU reads it back as
- * 0–1 — that scaling is the sampler's, not the graph's, so the CPU target,
- * which has no sampler, returns the stored number. Bytes bound to a float
- * sampler are scaled here instead, so what a test measures is what a renderer
- * would show. An integer sampler fetches raw texels on a GPU too, and is left
- * alone; so is a sampler whose type nothing here knows.
- */
-function normalized(data: ArrayLike<number>, samplerType: string | undefined): ArrayLike<number> {
-  const isBytes = data instanceof Uint8Array || data instanceof Uint8ClampedArray;
-  if (!isBytes || samplerType === undefined || !samplerType.startsWith("sampler")) return data;
-  const cached = NORMALIZED.get(data);
-  if (cached) return cached;
-  const scaled = new Float32Array(data.length);
-  for (let i = 0; i < data.length; i++) scaled[i] = data[i] / 255;
-  NORMALIZED.set(data, scaled);
-  return scaled;
 }
 
 /**
