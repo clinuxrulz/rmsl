@@ -136,7 +136,13 @@ per-draw writes never race the previous draw.
 ### Texture lifetime
 
 A renderer creates the GPU texture behind a `Texture` the first time it draws
-with it and holds on to it from then on. `texture.dispose()` gives it back:
+with it, and uploads the image again on the next render whenever
+`needsUpdate` is set, at a new size if the image changed shape. Pointing a
+material at a *different* `Texture` object instead needs
+`material.needsUpdate = true`, so the renderer rebuilds what the shader reads
+from.
+
+`texture.dispose()` gives the GPU texture back:
 
 ```typescript
 const texture = new DataTexture(pixels, 256, 256);

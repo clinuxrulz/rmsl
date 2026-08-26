@@ -248,8 +248,10 @@ export class WebGPURenderer {
     let bySignature = this.pipelines.get(material);
     const entry = bySignature?.get(signature);
     if (entry && !material.needsUpdate) {
+      this.refreshTextures(entry);
       // A texture disposed since the last draw took this entry's bind group
-      // with it; rebuild it from the textures the material points at now.
+      // with it, and so does one that had to be re-created at a new size;
+      // rebuild it from the textures the material points at now.
       entry.bindGroup ??= this.createBindGroup(entry);
       return entry;
     }
@@ -411,13 +413,29 @@ export class WebGPURenderer {
     }];
     for (const t of entry.textureBindings) {
       const sampler = entry.program.samplers.find((s) => s.name === t.name)!;
-      resources.push({ binding: t.binding, resource: this.ensureGpuTexture(sampler.texture(), t.type).view });
+      resources.push({ binding: t.binding, resource: this.ensureGpuTexture(sampler.texture(), t.type).createView() });
     }
     for (const s of entry.samplerBindings) {
       const sampler = entry.program.samplers.find((x) => x.name === s.name)!;
       resources.push({ binding: s.binding, resource: this.ensureSampler(sampler.texture()) });
     }
     return this.device.createBindGroup({ layout: entry.bindGroupLayout, entries: resources });
+  }
+
+  /**
+   * Upload again the textures of this entry whose `needsUpdate` is set, so a
+   * texture whose image changed reaches the GPU on the next draw.
+   *
+   * A bind group binds the *texture*, not its contents, so an image rewritten
+   * at the same size needs nothing else. One that changed size or format is a
+   * new GPU texture, and `ensureGpuTexture` drops the bind groups that named
+   * the old one.
+   */
+  private refreshTextures(entry: PipelineEntry): void {
+    for (const t of entry.textureBindings) {
+      const texture = entry.program.samplers.find((s) => s.name === t.name)!.texture();
+      if (texture?.needsUpdate) this.ensureGpuTexture(texture, t.type);
+    }
   }
 
   /**
@@ -433,12 +451,21 @@ export class WebGPURenderer {
     this.textures.delete(texture);
     this.samplers.delete(texture);
     texture.removeEventListener("dispose", this.onTextureDispose);
+    this.invalidateBindGroups(texture);
+  };
+
+  /**
+   * Drop the bind group of every cached pipeline that binds this texture, so
+   * the next `ensurePipeline` builds one that names whatever GPU texture the
+   * `Texture` has now — or none at all, if it was disposed.
+   */
+  private invalidateBindGroups(texture: Texture): void {
     for (const bySignature of this.pipelines.values()) {
       for (const entry of bySignature.values()) {
         if (entry.program.samplers.some((s) => s.texture() === texture)) entry.bindGroup = null;
       }
     }
-  };
+  }
 
   private ensureGeometryBuffers(geometry: BufferGeometry): GeometryBuffers {
     let buffers = this.geometryBuffers.get(geometry);
@@ -516,7 +543,11 @@ export class WebGPURenderer {
     return buffer;
   }
 
-  private ensureGpuTexture(texture: Texture | null, samplerType: string): { view: GPUTextureView } {
+  /**
+   * The GPU texture holding this `Texture`'s image, created on first use and
+   * written again whenever `needsUpdate` says the image changed.
+   */
+  private ensureGpuTexture(texture: Texture | null, samplerType: string): GPUTexture {
     const t = texture ?? this.blankTexture(samplerType);
     const integer = isIntegerSampler(samplerType);
     const dimension = samplerDimension(samplerType);
@@ -530,6 +561,17 @@ export class WebGPURenderer {
           ? samplerType.startsWith("isampler") ? "r8sint" : "r8uint"
           : integerGpuFormat(samplerType, ArrayBuffer.isView(t.image) ? t.image : null)
         : "rgba8unorm";
+      // A WebGPU texture's size and format are fixed when it is created, so an
+      // image that changed shape cannot be written into the texture it had
+      // before: that one is destroyed and replaced. Whatever bound it has to
+      // be rebound, since a bind group names a texture that no longer exists.
+      if (gpu && (gpu.width !== width || gpu.height !== height
+        || gpu.depthOrArrayLayers !== depth || gpu.format !== format)) {
+        gpu.destroy();
+        this.textures.delete(t);
+        this.invalidateBindGroups(t);
+        gpu = undefined;
+      }
       if (!gpu) {
         gpu = this.device.createTexture({
           size: [width, height, depth],
@@ -544,7 +586,7 @@ export class WebGPURenderer {
       }
       t.needsUpdate = false;
     }
-    return { view: gpu.createView() };
+    return gpu;
   }
 
   /**

@@ -1,27 +1,40 @@
-// Bind-group bookkeeping in the WebGPU renderer, against a recording stub of a
+// Texture bookkeeping in the WebGPU renderer, against a recording stub of a
 // GPUDevice.
 //
 // Chromium-with-SwiftShader — what the other renderer tests draw through — has
 // no WebGPU, so this layer has nowhere to run for real here. What the stub does
-// cover is the part that is bookkeeping rather than drawing: a bind group holds
-// a view of a texture, so disposing that texture has to destroy the GPU texture
-// and drop every bind group that named it, and the next pipeline lookup has to
-// build a replacement.
+// cover is the part that is bookkeeping rather than drawing: which GPU textures
+// are created, written and destroyed as a `Texture` is updated or disposed, and
+// which bind groups have to be built again because the texture they named is
+// gone.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { vec2 } from "../rmsl";
 import { WebGPURenderer, Scene, MeshBasicMaterial, DataTexture } from "./index";
 
-/** A GPUTexture stand-in that records whether it was destroyed. */
+/** A GPUTexture stand-in: its size and format, and whether it was destroyed. */
 interface StubTexture {
+  width: number;
+  height: number;
+  depthOrArrayLayers: number;
+  format: string;
   destroyed: boolean;
   createView: () => { texture: StubTexture };
   destroy: () => void;
 }
 
-function stubDevice(): { device: any; textures: StubTexture[]; bindGroups: unknown[] } {
+interface StubDevice {
+  device: any;
+  textures: StubTexture[];
+  bindGroups: unknown[];
+  /** One entry per `queue.writeTexture`: which texture, and the bytes given. */
+  writes: { texture: StubTexture; data: ArrayBufferView }[];
+}
+
+function stubDevice(): StubDevice {
   const textures: StubTexture[] = [];
   const bindGroups: unknown[] = [];
+  const writes: { texture: StubTexture; data: ArrayBufferView }[] = [];
   const device = {
     createShaderModule: () => ({}),
     createBuffer: () => ({ destroy: () => {} }),
@@ -34,8 +47,13 @@ function stubDevice(): { device: any; textures: StubTexture[]; bindGroups: unkno
       bindGroups.push(group);
       return group;
     },
-    createTexture: () => {
+    createTexture: (descriptor: any) => {
+      const [width, height, depth] = descriptor.size;
       const texture: StubTexture = {
+        width,
+        height,
+        depthOrArrayLayers: depth,
+        format: descriptor.format,
         destroyed: false,
         createView: () => ({ texture }),
         destroy: () => { texture.destroyed = true; },
@@ -43,9 +61,14 @@ function stubDevice(): { device: any; textures: StubTexture[]; bindGroups: unkno
       textures.push(texture);
       return texture;
     },
-    queue: { writeTexture: () => {}, writeBuffer: () => {} },
+    queue: {
+      writeTexture: (destination: any, data: ArrayBufferView) => {
+        writes.push({ texture: destination.texture, data });
+      },
+      writeBuffer: () => {},
+    },
   };
-  return { device, textures, bindGroups };
+  return { device, textures, bindGroups, writes };
 }
 
 function stubCanvas(): any {
@@ -72,6 +95,72 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("WebGPURenderer texture updates", () => {
+  it("uploads a changed image again on the next render", () => {
+    const { device, textures, bindGroups, writes } = stubDevice();
+    const renderer = new WebGPURenderer(stubCanvas(), device) as any;
+    const texture = new DataTexture(new Uint8Array([0, 0, 220, 255]), 1, 1);
+    const material = texturedMaterial(texture);
+    const scene = new Scene();
+
+    const entry = renderer.ensurePipeline(material, scene, false, false);
+    expect(writes).toHaveLength(1);
+    expect(texture.needsUpdate).toBe(false);
+
+    texture.image = new Uint8Array([220, 0, 0, 255]);
+    texture.needsUpdate = true;
+    renderer.ensurePipeline(material, scene, false, false);
+
+    expect(writes).toHaveLength(2);
+    expect([...(writes[1].data as Uint8Array)]).toEqual([220, 0, 0, 255]);
+    // The image is written into the texture that is already bound, so nothing
+    // was created and the bind group still holds.
+    expect(writes[1].texture).toBe(textures[0]);
+    expect(textures).toHaveLength(1);
+    expect(bindGroups).toHaveLength(1);
+    expect(entry.bindGroup).toBe(bindGroups[0]);
+  });
+
+  it("leaves an unchanged texture alone", () => {
+    const { device, writes } = stubDevice();
+    const renderer = new WebGPURenderer(stubCanvas(), device) as any;
+    const texture = new DataTexture(new Uint8Array([0, 0, 220, 255]), 1, 1);
+    const material = texturedMaterial(texture);
+    const scene = new Scene();
+
+    renderer.ensurePipeline(material, scene, false, false);
+    renderer.ensurePipeline(material, scene, false, false);
+    expect(writes).toHaveLength(1);
+  });
+
+  it("replaces and rebinds a texture whose image changed size", () => {
+    const { device, textures, bindGroups, writes } = stubDevice();
+    const renderer = new WebGPURenderer(stubCanvas(), device) as any;
+    const texture = new DataTexture(new Uint8Array([0, 0, 220, 255]), 1, 1);
+    const material = texturedMaterial(texture);
+    const scene = new Scene();
+
+    const entry = renderer.ensurePipeline(material, scene, false, false);
+    const first = entry.bindGroup;
+
+    texture.image = new Uint8Array(2 * 2 * 4).fill(220);
+    texture.width = 2;
+    texture.height = 2;
+    texture.needsUpdate = true;
+    const again = renderer.ensurePipeline(material, scene, false, false);
+
+    // A GPU texture is fixed at the size it was created with, so the bigger
+    // image needs a new one — and a bind group naming the old one is no good.
+    expect(textures).toHaveLength(2);
+    expect(textures[0].destroyed).toBe(true);
+    expect(textures[1].width).toBe(2);
+    expect(writes[1].texture).toBe(textures[1]);
+    expect(renderer.textures.get(texture)).toBe(textures[1]);
+    expect(again.bindGroup).not.toBe(first);
+    expect(bindGroups).toHaveLength(2);
+  });
 });
 
 describe("WebGPURenderer texture disposal", () => {
