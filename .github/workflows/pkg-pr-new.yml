@@ -1,0 +1,39 @@
+# Publishes a preview package for every commit on main and every pull request,
+# so a consumer can install a build that has not been released to npm:
+#
+#   npm i https://pkg.pr.new/@random-mesh/rmsl@<commit-sha>
+#
+# The URL is posted as a comment on the pull request, and printed in this
+# workflow's log for pushes to main. Previews expire after a few weeks.
+name: Preview package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Install scripts are skipped: the only one is the native Dawn download
+      # for @kmamal/gpu, which exists to validate generated shaders in the
+      # tests and is not needed to build the package.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # Only `dist` is published (see the `files` field), so the build has to
+      # run before the package is packed.
+      - run: pnpm build
+
+      - run: pnpm dlx pkg-pr-new publish --compact
