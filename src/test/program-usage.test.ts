@@ -11,6 +11,7 @@ import { uniform, vec2, vec4 } from "../rmsl";
 import { sepia } from "../effects";
 import {
   Scene, DataTexture, MeshBasicMaterial, MeshStandardMaterial, DirectionalLight, AmbientLight,
+  NearestFilter, RepeatWrapping,
 } from "../scene";
 import { fromProgram, fromPass, render, closeTo, uniformsIn } from "./index";
 
@@ -95,6 +96,37 @@ describe("fromProgram", () => {
     // The texture's left column is black and its right column white.
     expect(image.at(0, 0)[0]).toBe(0);
     expect(image.at(1, 0)[0]).toBe(1);
+  });
+
+  it("reads a texture the way the texture asks to be read", () => {
+    // The same two texels, coordinates and answers as the WebGL renderer's
+    // driver test in `renderer.test.ts` — which is the point: what a test
+    // measures here is what a renderer draws.
+    const texels = () => new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]);
+    const shadeAt = (texture: DataTexture, x: number): number[] => {
+      const material = new MeshBasicMaterial({ color: 0xffffff });
+      material.map = texture;
+      const program = build(material);
+      const shade = fromProgram(program);
+      return shade({ varyings: { uv: [x, 0.5] } }).value as number[];
+    };
+
+    const clamped = new DataTexture(texels(), 2, 1);
+    clamped.magFilter = NearestFilter;
+    expect(closeTo(shadeAt(clamped, 1.25).slice(0, 3), [0, 0, 1])).toBe(true);
+
+    const tiled = new DataTexture(texels(), 2, 1);
+    tiled.magFilter = NearestFilter;
+    tiled.wrapS = RepeatWrapping;
+    expect(closeTo(shadeAt(tiled, 1.25).slice(0, 3), [1, 0, 0])).toBe(true);
+
+    // Between the two texel centres: one texel with nearest, both blended
+    // under the default linear filtering.
+    expect(closeTo(shadeAt(clamped, 0.5).slice(0, 3), [0, 0, 1])).toBe(true);
+    const smooth = new DataTexture(texels(), 2, 1);
+    const blended = shadeAt(smooth, 0.5);
+    expect(blended[0]).toBeGreaterThan(0.4);
+    expect(blended[2]).toBeGreaterThan(0.4);
   });
 
   it("refuses a stage the program has no root for", () => {

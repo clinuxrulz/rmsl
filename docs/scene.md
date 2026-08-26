@@ -171,10 +171,10 @@ Three things to know:
   no renderer builds a mip chain yet. That is also why the default `minFilter`
   is `LinearFilter` rather than three.js's `LinearMipmapLinearFilter`. See
   [issue #3](https://github.com/big-mesh-studios/rmsl/issues/3).
-- **The CPU target ignores both**, sampling nearest with clamped coordinates
-  whatever the texture says. Tests written with
-  [`@random-mesh/rmsl/test`](testing.md) therefore measure nearest-and-clamped
-  even where a renderer would filter or tile.
+- **The CPU target follows them too.** A material tested with
+  [`@random-mesh/rmsl/test`](testing.md) filters and wraps the way its renderer
+  does, so what a test measures is what the renderer draws. It has no mip chain
+  either, so `textureLod`'s level is ignored there.
 
 ### Texture lifetime
 

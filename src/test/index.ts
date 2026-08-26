@@ -24,8 +24,11 @@
 import {
   compileJS, compileJSFn,
   type Node, type ShaderType, type VariableNode,
-  type JsShaderContext, type JsTextureData,
+  type JsShaderContext, type JsTextureData, type JsTextureWrap,
 } from "../rmsl";
+// Numbers, not the scene graph: a texture written for a renderer says how it
+// wants to be read in three.js's constants, and the CPU target takes names.
+import { MirroredRepeatWrapping, NearestFilter, RepeatWrapping } from "../scene/textures/constants";
 
 // === Values ===
 
@@ -44,13 +47,19 @@ export type ShaderValue<A extends ShaderType> =
 
 /**
  * Texture data to sample from. A scene `DataTexture` fits as it stands: its
- * `image` is read when `data` is absent.
+ * `image` is read when `data` is absent, and its three.js filtering and
+ * wrapping constants are read as the CPU target's names for them.
  */
 export type TextureData = JsTextureData | {
   image: ArrayLike<number>;
   width: number;
   height: number;
   depth?: number;
+  magFilter?: number;
+  minFilter?: number;
+  wrapS?: number;
+  wrapT?: number;
+  wrapR?: number;
 };
 
 /**
@@ -448,7 +457,7 @@ export function fromProgram(program: ProgramLike, options: ProgramOptions = {}):
 
   const textures: Record<string, TextureData> = {};
   for (const sampler of program.samplers ?? []) {
-    const texture = asTextureData(sampler.texture?.());
+    const texture = toTextureData(sampler.texture?.());
     if (texture) textures[sampler.node.name] = texture;
   }
 
@@ -515,12 +524,23 @@ const RENDERER_DEFAULTS: Record<string, unknown> = {
   cameraPosition: [0, 0, 0],
 };
 
-/** A texture the CPU can sample, from whatever a sampler binding points at. */
-function asTextureData(texture: unknown): TextureData | null {
+/**
+ * A texture the CPU target can sample, from whatever it was handed: data under
+ * `data` or under `image`, and sampling stated either in the CPU target's own
+ * names or in the three.js constants a scene texture carries.
+ *
+ * Null when there are no pixels to read — an `HTMLImageElement` or a canvas is
+ * nothing without a browser, and a sampler bound to one is left unbound rather
+ * than bound to something empty.
+ */
+function toTextureData(texture: unknown): JsTextureData | null {
   if (typeof texture !== "object" || texture === null) return null;
-  const candidate = texture as { image?: unknown; data?: unknown; width?: number; height?: number; depth?: number };
+  const candidate = texture as {
+    image?: unknown; data?: unknown; width?: number; height?: number; depth?: number;
+    filter?: "nearest" | "linear"; magFilter?: number;
+    wrapS?: unknown; wrapT?: unknown; wrapR?: unknown;
+  };
   const pixels = candidate.data ?? candidate.image;
-  // An HTMLImageElement or a canvas has no pixels to read without a browser.
   if (!ArrayBuffer.isView(pixels) && !Array.isArray(pixels)) return null;
   if (typeof candidate.width !== "number" || typeof candidate.height !== "number") return null;
   return {
@@ -528,7 +548,35 @@ function asTextureData(texture: unknown): TextureData | null {
     width: candidate.width,
     height: candidate.height,
     depth: candidate.depth,
+    filter: candidate.filter ?? textureFilter(candidate.magFilter),
+    wrapS: textureWrap(candidate.wrapS),
+    wrapT: textureWrap(candidate.wrapT),
+    wrapR: textureWrap(candidate.wrapR),
   };
+}
+
+/**
+ * A scene texture's filtering constant as the CPU target's name for it. The
+ * magnification filter is the one taken: choosing the other needs the footprint
+ * of the pixel being shaded, which a single evaluation has no way to know.
+ */
+function textureFilter(magFilter: number | undefined): "nearest" | "linear" {
+  if (magFilter === undefined || magFilter === NearestFilter) return "nearest";
+  return "linear";
+}
+
+/** A wrapping mode as the CPU target's name for it, given either spelling. */
+function textureWrap(wrap: unknown): JsTextureWrap {
+  switch (wrap) {
+    case RepeatWrapping:
+    case "repeat":
+      return "repeat";
+    case MirroredRepeatWrapping:
+    case "mirror":
+      return "mirror";
+    default:
+      return "clamp";
+  }
 }
 
 /**
@@ -706,9 +754,8 @@ function textureSlots(
       ? (values as readonly TextureBinding[]).map(([node, texture]) => [node.name, texture])
       : Object.entries(values as Record<string, TextureData>);
     for (const [name, texture] of pairs) {
-      const slot = names?.get(name) ?? name;
-      const data = "data" in texture ? texture.data : texture.image;
-      record[slot] = { data, width: texture.width, height: texture.height, depth: texture.depth };
+      const data = toTextureData(texture);
+      if (data) record[names?.get(name) ?? name] = data;
     }
   }
   return record;

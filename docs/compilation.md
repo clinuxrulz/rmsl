@@ -325,11 +325,37 @@ declares the variables inside the callable instead.
 
 ### Sampling
 
-Float textures sample with nearest-neighbour lookup at normalized coordinates,
-clamped to the edge; integer textures (`isampler*`/`usampler*`) fetch at texel
-coordinates. Filtering and wrapping are not configurable — a scene `Texture`'s
-`magFilter`/`wrapS` and friends are read by the renderers, not by this target —
-and the `textureLod` LOD argument is ignored. Data is RGBA in a flat array.
+Float textures sample at normalized coordinates; integer textures
+(`isampler*`/`usampler*`) fetch at texel coordinates. Data is RGBA in a flat
+array.
+
+How a float texture is read comes with the data, not with the compiled
+function, the same way it belongs to the sampler rather than to the shader on a
+GPU:
+
+```typescript
+ctx.textures[map.name] = {
+  data, width: 64, height: 64,
+  filter: "linear",   // "nearest" (the default) | "linear"
+  wrapS: "repeat",    // "clamp" (the default) | "repeat" | "mirror"
+  wrapT: "repeat",    // and wrapR for a 3D texture
+};
+```
+
+`"linear"` blends the neighbouring texels — bilinear for a 2D texture,
+trilinear for a 3D one — and the wrapping modes match their GPU counterparts,
+so a tiling texture tiles here too. One `filter` rather than the
+`magFilter`/`minFilter` pair a GPU texture carries: choosing between the two
+needs the footprint of the pixel being shaded, which a single CPU evaluation
+has no way to know.
+
+Two things a GPU does that this does not: there is no mip chain, so
+`textureLod`'s level argument is ignored, and a texel fetch neither filters nor
+wraps — as on a GPU, where `texelFetch`/`textureLoad` read the texel or nothing.
+
+`@random-mesh/rmsl/scene` textures state this in three.js's constants
+(`magFilter`, `wrapS`, …); `@random-mesh/rmsl/test` reads those and passes them
+through, so a material tested on the CPU samples the way its renderer does.
 
 **8-bit data read through a float sampler comes back as 0–1**, the way it does
 on both backends: an 8-bit texture is uploaded as a normalized format, and the

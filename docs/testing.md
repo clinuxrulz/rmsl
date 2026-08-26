@@ -247,12 +247,13 @@ is what went unbound.
   between neighbouring pixels, which a single evaluation has no notion of, so
   they read as zero here and an anti-aliased edge reads as a hard one. Pass
   `{ derivatives: "throw" }` to be told rather than quietly given zero.
-- **Sampling is nearest-neighbour with clamped coordinates**, whatever a scene
-  `Texture` sets `magFilter`/`minFilter`/`wrapS`/`wrapT` to, and `textureLod`'s
-  level is ignored. Filtering and wrapping belong to the sampler, which the CPU
-  has none of, so a material that tiles or blends its texture on screen does
-  neither here. What *does* carry over is the range: the 0–255 an 8-bit texture
-  holds reads back as the 0–1 a float sampler gives a shader.
+- **Sampling follows the texture**: a scene `Texture`'s `magFilter` and
+  `wrapS`/`wrapT` are honoured, and the 0–255 an 8-bit texture holds reads back
+  as the 0–1 a float sampler gives a shader — so a textured material measures
+  here as it looks on screen. Give a texture of your own `filter: "linear"` and
+  `wrapS: "repeat"` to say the same thing. What is missing is the mip chain:
+  `textureLod`'s level is ignored, and a minification filter has no footprint to
+  be chosen by.
 - **The CPU computes f64, a GPU f32.** Results can differ in the last bits,
   which is what the tolerance is for. A test that must pin f32 behaviour still
   belongs on a device.

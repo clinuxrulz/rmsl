@@ -29,7 +29,7 @@ import {
   mul, add, sub, sin, mix, clamp, step, smoothstep, dot, cross,
   normalize, length, distance, reflect, refract, faceForward,
   atan, inverseSqrt, all, any, min, max, pow, textureLoad,
-  type Node,
+  type Node, type JsTextureData,
 } from "./rmsl";
 
 const approx = (actual: number, want: number) =>
@@ -622,6 +622,73 @@ describe("JS backend: CPU-specific behaviour", () => {
     const data = new Uint8Array([0, 128, 255, 255]);
     expect(fn({ textures: { [tex.name]: { data, width: 1, height: 1 } } }))
       .toEqual([0, 128 / 255, 1, 1]);
+  });
+
+  it("blends neighbouring texels when the texture asks for linear filtering", () => {
+    let tex!: any;
+    const prog = Fn(() => {
+      tex = uniform("sampler2D");
+      return tex.texture(vec2(0.5, 0.5));
+    })();
+    const fn = compileJS(() => prog, { name: "main", params: [] });
+    // Two texels, 0 and 100, whose centres sit at 0.25 and 0.75. Sampling
+    // halfway between them lands in the second texel outright without
+    // filtering, and is half of each with it.
+    const data = [0, 0, 0, 0, 100, 100, 100, 100];
+    const texture = { data, width: 2, height: 1 };
+    expect(fn({ textures: { [tex.name]: texture } })).toEqual([100, 100, 100, 100]);
+    expect(fn({ textures: { [tex.name]: { ...texture, filter: "linear" as const } } }))
+      .toEqual([50, 50, 50, 50]);
+  });
+
+  it("wraps a coordinate past the edge the way the texture asks", () => {
+    let tex!: any;
+    const prog = Fn(() => {
+      tex = uniform("sampler2D");
+      return tex.texture(vec2(1.25, 0.5));
+    })();
+    const fn = compileJS(() => prog, { name: "main", params: [] });
+    const texture = { data: [10, 10, 10, 10, 20, 20, 20, 20], width: 2, height: 1 };
+    const red = (t: JsTextureData): number => (fn({ textures: { [tex.name]: t } }) as number[])[0];
+
+    // A quarter past the right edge: the last texel stretched, the image
+    // tiled back to the first, or tiled and flipped back to the last.
+    expect(red(texture)).toBe(20);
+    expect(red({ ...texture, wrapS: "repeat" as const })).toBe(10);
+    expect(red({ ...texture, wrapS: "mirror" as const })).toBe(20);
+  });
+
+  it("wraps behind the left edge too", () => {
+    let tex!: any;
+    const prog = Fn(() => {
+      tex = uniform("sampler2D");
+      return tex.texture(vec2(-0.25, 0.5));
+    })();
+    const fn = compileJS(() => prog, { name: "main", params: [] });
+    const texture = { data: [10, 10, 10, 10, 20, 20, 20, 20], width: 2, height: 1 };
+    const red = (t: JsTextureData): number => (fn({ textures: { [tex.name]: t } }) as number[])[0];
+
+    expect(red(texture)).toBe(10);
+    expect(red({ ...texture, wrapS: "repeat" as const })).toBe(20);
+    expect(red({ ...texture, wrapS: "mirror" as const })).toBe(10);
+  });
+
+  it("blends across the depth of a 3D texture", () => {
+    let tex!: any;
+    const prog = Fn(() => {
+      tex = uniform("sampler3D");
+      return tex.texture(vec3(0.5, 0.5, 0.5));
+    })();
+    const fn = compileJS(() => prog, { name: "main", params: [] });
+    // Two slices, 0 and 100, sampled halfway between their centres.
+    const texture: JsTextureData = {
+      data: [0, 0, 0, 0, 100, 100, 100, 100],
+      width: 1,
+      height: 1,
+      depth: 2,
+      filter: "linear",
+    };
+    expect(fn({ textures: { [tex.name]: texture } })).toEqual([50, 50, 50, 50]);
   });
 
   it("fetches integer textures at texel coordinates", () => {

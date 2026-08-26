@@ -5146,11 +5146,80 @@ function jsHelperSource(name: string): string {
     case "matDiag":
       return `function _matDiag(s, size, stride) {\n  let m = new Array(size).fill(0);\n  for (let i = 0; i < size; i += stride) m[i] = s;\n  return m;\n}`;
     case "tex2d":
-      return `function _tex2d(tex, uv, out) {\n  out = out || [0, 0, 0, 0];\n  let x = Math.max(0, Math.min(tex.width - 1, Math.floor(uv[0] * tex.width)));\n  let y = Math.max(0, Math.min(tex.height - 1, Math.floor(uv[1] * tex.height)));\n  let o = (y * tex.width + x) * 4;\n  let s = _unorm(tex);\n  out[0] = tex.data[o] / s;\n  out[1] = tex.data[o + 1] / s;\n  out[2] = tex.data[o + 2] / s;\n  out[3] = tex.data[o + 3] / s;\n  return out;\n}`;
+      return `function _tex2d(tex, uv, out) {
+  out = out || [0, 0, 0, 0];
+  let w = tex.width, h = tex.height, s = _unorm(tex);
+  if (tex.filter === "linear") {
+    let fx = uv[0] * w - 0.5, fy = uv[1] * h - 0.5;
+    let x0 = Math.floor(fx), y0 = Math.floor(fy);
+    let tx = fx - x0, ty = fy - y0;
+    let xa = _wrap(x0, w, tex.wrapS) * 4, xb = _wrap(x0 + 1, w, tex.wrapS) * 4;
+    let ya = _wrap(y0, h, tex.wrapT) * w * 4, yb = _wrap(y0 + 1, h, tex.wrapT) * w * 4;
+    for (let i = 0; i < 4; i++) {
+      let lower = tex.data[ya + xa + i] + (tex.data[ya + xb + i] - tex.data[ya + xa + i]) * tx;
+      let upper = tex.data[yb + xa + i] + (tex.data[yb + xb + i] - tex.data[yb + xa + i]) * tx;
+      out[i] = (lower + (upper - lower) * ty) / s;
+    }
+    return out;
+  }
+  let x = _wrap(Math.floor(uv[0] * w), w, tex.wrapS);
+  let y = _wrap(Math.floor(uv[1] * h), h, tex.wrapT);
+  let o = (y * w + x) * 4;
+  out[0] = tex.data[o] / s;
+  out[1] = tex.data[o + 1] / s;
+  out[2] = tex.data[o + 2] / s;
+  out[3] = tex.data[o + 3] / s;
+  return out;
+}`;
     case "texFetch2d":
       return `function _texFetch2d(tex, uv, out) {\n  out = out || [0, 0, 0, 0];\n  let x = Math.floor(uv[0]);\n  let y = Math.floor(uv[1]);\n  if (x < 0 || y < 0 || x >= tex.width || y >= tex.height) return out;\n  let o = (y * tex.width + x) * 4;\n  out[0] = tex.data[o];\n  out[1] = tex.data[o + 1];\n  out[2] = tex.data[o + 2];\n  out[3] = tex.data[o + 3];\n  return out;\n}`;
     case "tex3d":
-      return `function _tex3d(tex, uvw, out) {\n  out = out || [0, 0, 0, 0];\n  let x = Math.max(0, Math.min(tex.width - 1, Math.floor(uvw[0] * tex.width)));\n  let y = Math.max(0, Math.min(tex.height - 1, Math.floor(uvw[1] * tex.height)));\n  let z = Math.max(0, Math.min(tex.depth - 1, Math.floor(uvw[2] * tex.depth)));\n  let o = ((z * tex.height + y) * tex.width + x) * 4;\n  let s = _unorm(tex);\n  out[0] = tex.data[o] / s;\n  out[1] = tex.data[o + 1] / s;\n  out[2] = tex.data[o + 2] / s;\n  out[3] = tex.data[o + 3] / s;\n  return out;\n}`;
+      return `function _tex3d(tex, uvw, out) {
+  out = out || [0, 0, 0, 0];
+  let w = tex.width, h = tex.height, d = tex.depth, s = _unorm(tex);
+  if (tex.filter === "linear") {
+    let fx = uvw[0] * w - 0.5, fy = uvw[1] * h - 0.5, fz = uvw[2] * d - 0.5;
+    let x0 = Math.floor(fx), y0 = Math.floor(fy), z0 = Math.floor(fz);
+    let tx = fx - x0, ty = fy - y0, tz = fz - z0;
+    let xa = _wrap(x0, w, tex.wrapS) * 4, xb = _wrap(x0 + 1, w, tex.wrapS) * 4;
+    let ya = _wrap(y0, h, tex.wrapT) * w * 4, yb = _wrap(y0 + 1, h, tex.wrapT) * w * 4;
+    let za = _wrap(z0, d, tex.wrapR) * h * w * 4, zb = _wrap(z0 + 1, d, tex.wrapR) * h * w * 4;
+    for (let i = 0; i < 4; i++) {
+      let near = _lerp2(tex.data, za + ya + xa + i, za + ya + xb + i, za + yb + xa + i, za + yb + xb + i, tx, ty);
+      let far = _lerp2(tex.data, zb + ya + xa + i, zb + ya + xb + i, zb + yb + xa + i, zb + yb + xb + i, tx, ty);
+      out[i] = (near + (far - near) * tz) / s;
+    }
+    return out;
+  }
+  let x = _wrap(Math.floor(uvw[0] * w), w, tex.wrapS);
+  let y = _wrap(Math.floor(uvw[1] * h), h, tex.wrapT);
+  let z = _wrap(Math.floor(uvw[2] * d), d, tex.wrapR);
+  let o = ((z * h + y) * w + x) * 4;
+  out[0] = tex.data[o] / s;
+  out[1] = tex.data[o + 1] / s;
+  out[2] = tex.data[o + 2] / s;
+  out[3] = tex.data[o + 3] / s;
+  return out;
+}`;
+    // One bilinear tap of a volume, so the trilinear blend above is two of
+    // these and a step between them.
+    case "lerp2":
+      return `function _lerp2(data, a, b, c, e, tx, ty) {
+  let lower = data[a] + (data[b] - data[a]) * tx;
+  let upper = data[c] + (data[e] - data[c]) * tx;
+  return lower + (upper - lower) * ty;
+}`;
+    // A texel index brought inside the image, the way a sampler's address mode
+    // does it: the edge stretched, the image tiled, or tiled and flipped.
+    case "wrap":
+      return `function _wrap(i, n, mode) {
+  if (mode === "repeat") return ((i % n) + n) % n;
+  if (mode === "mirror") {
+    let period = ((i % (2 * n)) + 2 * n) % (2 * n);
+    return period < n ? period : 2 * n - 1 - period;
+  }
+  return i < 0 ? 0 : (i > n - 1 ? n - 1 : i);
+}`;
     case "texFetch3d":
       return `function _texFetch3d(tex, uvw, out) {\n  out = out || [0, 0, 0, 0];\n  let x = Math.floor(uvw[0]);\n  let y = Math.floor(uvw[1]);\n  let z = Math.floor(uvw[2]);\n  if (x < 0 || y < 0 || z < 0 || x >= tex.width || y >= tex.height || z >= tex.depth) return out;\n  let o = ((z * tex.height + y) * tex.width + x) * 4;\n  out[0] = tex.data[o];\n  out[1] = tex.data[o + 1];\n  out[2] = tex.data[o + 2];\n  out[3] = tex.data[o + 3];\n  return out;\n}`;
     case "texFetchUnorm2d":
@@ -5980,7 +6049,11 @@ function compileJSNode(
       let coords = jsCompileOperand(node.params![1], ctx);
       let helper = is3D ? (isInteger ? "texFetch3d" : "tex3d") : (isInteger ? "texFetch2d" : "tex2d");
       jsRequireHelper(ctx, helper);
-      if (!isInteger) jsRequireHelper(ctx, "unorm");
+      if (!isInteger) {
+        jsRequireHelper(ctx, "unorm");
+        jsRequireHelper(ctx, "wrap");
+        if (is3D) jsRequireHelper(ctx, "lerp2");
+      }
       if (ctx.outTarget) {
         return {
           decls: coords.decls,
@@ -6227,12 +6300,29 @@ export type JsShaderContext = {
   fragCoord?: [number, number];
 };
 
+/** How a coordinate outside the image is turned into one inside it. */
+export type JsTextureWrap = "clamp" | "repeat" | "mirror";
+
 /** Texture data the JS target samples from. */
 export type JsTextureData = {
   data: ArrayLike<number>;
   width: number;
   height: number;
   depth?: number;
+  /**
+   * What to do when the sampled point falls between texels: `"nearest"` (the
+   * default) takes the texel it lands in, `"linear"` blends the neighbours the
+   * way a filtering sampler does.
+   *
+   * One filter rather than the `magFilter`/`minFilter` pair a GPU texture
+   * carries: choosing between them needs the footprint of the pixel being
+   * shaded, which a single CPU evaluation has no way to know.
+   */
+  filter?: "nearest" | "linear";
+  /** What happens outside `0..1`, per axis. All default to `"clamp"`. */
+  wrapS?: JsTextureWrap;
+  wrapT?: JsTextureWrap;
+  wrapR?: JsTextureWrap;
 };
 
 /**
