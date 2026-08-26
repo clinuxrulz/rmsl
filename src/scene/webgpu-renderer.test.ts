@@ -10,7 +10,10 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { vec2 } from "../rmsl";
-import { WebGPURenderer, Scene, MeshBasicMaterial, DataTexture } from "./index";
+import {
+  WebGPURenderer, Scene, MeshBasicMaterial, DataTexture,
+  NearestFilter, RepeatWrapping, MirroredRepeatWrapping,
+} from "./index";
 
 /** A GPUTexture stand-in: its size and format, and whether it was destroyed. */
 interface StubTexture {
@@ -27,6 +30,8 @@ interface StubDevice {
   device: any;
   textures: StubTexture[];
   bindGroups: unknown[];
+  /** One entry per `createSampler`: the descriptor it was asked for. */
+  samplers: any[];
   /** One entry per `queue.writeTexture`: which texture, and the bytes given. */
   writes: { texture: StubTexture; data: ArrayBufferView }[];
 }
@@ -34,6 +39,7 @@ interface StubDevice {
 function stubDevice(): StubDevice {
   const textures: StubTexture[] = [];
   const bindGroups: unknown[] = [];
+  const samplers: any[] = [];
   const writes: { texture: StubTexture; data: ArrayBufferView }[] = [];
   const device = {
     createShaderModule: () => ({}),
@@ -41,7 +47,10 @@ function stubDevice(): StubDevice {
     createBindGroupLayout: () => ({}),
     createPipelineLayout: () => ({}),
     createRenderPipeline: () => ({}),
-    createSampler: () => ({}),
+    createSampler: (descriptor: unknown) => {
+      samplers.push(descriptor);
+      return descriptor;
+    },
     createBindGroup: (descriptor: unknown) => {
       const group = { descriptor };
       bindGroups.push(group);
@@ -68,7 +77,7 @@ function stubDevice(): StubDevice {
       writeBuffer: () => {},
     },
   };
-  return { device, textures, bindGroups, writes };
+  return { device, textures, bindGroups, samplers, writes };
 }
 
 function stubCanvas(): any {
@@ -95,6 +104,80 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("WebGPURenderer samplers", () => {
+  it("makes one sampler per filtering and wrapping combination", () => {
+    const { device, samplers } = stubDevice();
+    const renderer = new WebGPURenderer(stubCanvas(), device) as any;
+    const scene = new Scene();
+
+    const clamped = new DataTexture(new Uint8Array([0, 0, 220, 255]), 1, 1);
+    const alsoClamped = new DataTexture(new Uint8Array([220, 0, 0, 255]), 1, 1);
+    renderer.ensurePipeline(texturedMaterial(clamped), scene, false, false);
+    renderer.ensurePipeline(texturedMaterial(alsoClamped), scene, false, false);
+    // Two textures, sampled the same way: a sampler holds no image, so one does.
+    expect(samplers).toHaveLength(1);
+
+    const tiled = new DataTexture(new Uint8Array([0, 220, 0, 255]), 1, 1);
+    tiled.wrapS = RepeatWrapping;
+    renderer.ensurePipeline(texturedMaterial(tiled), scene, false, false);
+    expect(samplers).toHaveLength(2);
+    expect(samplers[1]).toMatchObject({ addressModeU: "repeat", addressModeV: "clamp-to-edge" });
+  });
+
+  it("describes the sampler the way the texture asked", () => {
+    const { device, samplers } = stubDevice();
+    const renderer = new WebGPURenderer(stubCanvas(), device) as any;
+    const texture = new DataTexture(new Uint8Array([0, 0, 220, 255]), 1, 1);
+    texture.magFilter = NearestFilter;
+    texture.minFilter = NearestFilter;
+    texture.wrapS = RepeatWrapping;
+    texture.wrapT = MirroredRepeatWrapping;
+    renderer.ensurePipeline(texturedMaterial(texture), new Scene(), false, false);
+    expect(samplers[0]).toEqual({
+      magFilter: "nearest",
+      minFilter: "nearest",
+      addressModeU: "repeat",
+      addressModeV: "mirror-repeat",
+      addressModeW: "clamp-to-edge",
+    });
+  });
+
+  it("rebinds when a texture is updated with a different sampler state", () => {
+    const { device, samplers } = stubDevice();
+    const renderer = new WebGPURenderer(stubCanvas(), device) as any;
+    const texture = new DataTexture(new Uint8Array([0, 0, 220, 255]), 1, 1);
+    const material = texturedMaterial(texture);
+    const scene = new Scene();
+    const entry = renderer.ensurePipeline(material, scene, false, false);
+    const first = entry.bindGroup;
+
+    texture.wrapS = RepeatWrapping;
+    texture.needsUpdate = true;
+    const again = renderer.ensurePipeline(material, scene, false, false);
+
+    // The bind group held the clamping sampler, so it cannot stand.
+    expect(samplers).toHaveLength(2);
+    expect(again.bindGroup).not.toBe(first);
+  });
+
+  it("leaves the bind group alone when an update changes nothing about sampling", () => {
+    const { device, samplers } = stubDevice();
+    const renderer = new WebGPURenderer(stubCanvas(), device) as any;
+    const texture = new DataTexture(new Uint8Array([0, 0, 220, 255]), 1, 1);
+    const material = texturedMaterial(texture);
+    const scene = new Scene();
+    const entry = renderer.ensurePipeline(material, scene, false, false);
+    const first = entry.bindGroup;
+
+    texture.image = new Uint8Array([220, 0, 0, 255]);
+    texture.needsUpdate = true;
+    const again = renderer.ensurePipeline(material, scene, false, false);
+
+    expect(samplers).toHaveLength(1);
+    expect(again.bindGroup).toBe(first);
+  });
 });
 
 describe("WebGPURenderer texture updates", () => {
@@ -179,7 +262,9 @@ describe("WebGPURenderer texture disposal", () => {
     texture.dispose();
     expect(textures[0].destroyed).toBe(true);
     expect(renderer.textures.size).toBe(0);
-    expect(renderer.samplers.size).toBe(0);
+    // The sampler is shared with every texture filtered and wrapped the same
+    // way, so it stays; what goes is this texture's claim on one.
+    expect(renderer.samplerKeys.size).toBe(0);
     // The group still holding a view of the destroyed texture is gone, so no
     // draw can reach it.
     expect(entry.bindGroup).toBe(null);

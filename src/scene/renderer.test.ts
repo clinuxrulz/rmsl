@@ -276,6 +276,58 @@ globalThis.__rmslTextureDisposeRun = () => {
 };
 `;
 
+// A texture's filtering and wrapping reach the driver: a 2x1 red/blue texture
+// sampled past its right edge clamps to the last texel, and tiles once the
+// texture asks to repeat. Sampling between the two texel centres blends them
+// under LinearFilter and picks one under NearestFilter.
+const ENTRY_SAMPLER_STATE = `
+import { WebGLRenderer, Scene, Mesh, PerspectiveCamera, PlaneGeometry,
+  MeshBasicMaterial, DataTexture, NearestFilter, RepeatWrapping } from "./index";
+import { vec2 } from "../rmsl";
+globalThis.__rmslSamplerStateRun = () => {
+  const canvas = document.createElement("canvas");
+  canvas.width = 16;
+  canvas.height = 16;
+  const renderer = new WebGLRenderer(canvas, { antialias: false });
+  renderer.setClearColor(0x000000);
+  const gl = renderer.gl;
+  const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+  camera.position.set(0, 0, 1);
+  camera.lookAt(0, 0, 0);
+
+  const read = (scene, coordinate) => {
+    renderer.render(scene, camera);
+    const pixels = new Uint8Array(4);
+    gl.readPixels(8, 8, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    return { r: pixels[0], b: pixels[2], error: gl.getError() };
+  };
+
+  const sceneAt = (texture, x) => {
+    const scene = new Scene();
+    const material = new MeshBasicMaterial();
+    material.fragmentNode = (b) => b.sampler("map", () => texture).texture(vec2(x, 0.5));
+    scene.add(new Mesh(new PlaneGeometry(2, 2), material));
+    return scene;
+  };
+
+  // Two texels: red on the left, blue on the right.
+  const texture = new DataTexture(new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1);
+  texture.magFilter = NearestFilter;
+  texture.minFilter = NearestFilter;
+
+  const clamped = read(sceneAt(texture, 1.25), 1.25);
+  texture.wrapS = RepeatWrapping;
+  texture.needsUpdate = true;
+  const repeated = read(sceneAt(texture, 1.25), 1.25);
+
+  const nearest = read(sceneAt(texture, 0.5), 0.5);
+  const smooth = new DataTexture(new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1);
+  const linear = read(sceneAt(smooth, 0.5), 0.5);
+
+  return { clamped, repeated, nearest, linear };
+};
+`;
+
 async function bundleEntry(source: string): Promise<string> {
   const result = await build({
     stdin: {
@@ -415,6 +467,31 @@ describe.skipIf(!GPU_ENABLED)("WebGLRenderer", () => {
     expect(result.trackedAgain).toBe(1);
     expect(result.b).toBeGreaterThan(150);
     expect(result.error).toBe(0);
+  }, 60_000);
+
+  it("wraps and filters a texture the way the texture asks", async () => {
+    const page = await gpuPage();
+    const code = await bundleEntry(ENTRY_SAMPLER_STATE);
+    const result = await page.evaluate(async (source: string) => {
+      // eslint-disable-next-line no-new-func
+      const fn = new Function(source);
+      fn();
+      return (globalThis as any).__rmslSamplerStateRun();
+    }, code);
+
+    // Past the right edge: the last texel stretched, then the image tiled.
+    expect(result.clamped.b).toBeGreaterThan(200);
+    expect(result.clamped.r).toBeLessThan(50);
+    expect(result.repeated.r).toBeGreaterThan(200);
+    expect(result.repeated.b).toBeLessThan(50);
+
+    // Between the two texel centres: one texel under NearestFilter, a blend of
+    // both under the default LinearFilter.
+    expect(Math.max(result.nearest.r, result.nearest.b)).toBeGreaterThan(200);
+    expect(Math.min(result.nearest.r, result.nearest.b)).toBeLessThan(50);
+    expect(result.linear.r).toBeGreaterThan(80);
+    expect(result.linear.b).toBeGreaterThan(80);
+    expect(result.linear.error).toBe(0);
   }, 60_000);
 
   it("renders with lowered precision from the renderer and a material override", async () => {

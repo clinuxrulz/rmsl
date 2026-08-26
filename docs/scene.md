@@ -44,7 +44,9 @@ renderer.setAnimationLoop(() => renderer.render(scene, camera));
 - **Math** — `Vector2/3/4`, `Matrix3/4`, `Quaternion`, `Euler`, `Color`,
   `Spherical`, `MathUtils`, all in the column-major `number[]`/`Float32Array`
   convention the rest of the library already uses.
-- **Textures** — `Texture`, `DataTexture` (see [Texture lifetime](#texture-lifetime)).
+- **Textures** — `Texture`, `DataTexture`, with three.js's filtering and
+  wrapping constants (see [Texture sampling](#texture-sampling) and
+  [Texture lifetime](#texture-lifetime)).
 - **Renderers** — `WebGLRenderer` (WebGL2) and `WebGPURenderer` (WebGPU).
 
 ## Node-based materials
@@ -132,6 +134,47 @@ uniforms are uploaded per draw, grouped by scope:
 `await WebGPURenderer.init(canvas?)`. Same API. Uniform values are packed into
 per-program ring buffers using the same layout the WGSL compiler emits, so
 per-draw writes never race the previous draw.
+
+### Texture sampling
+
+How a texture is read is set on the texture, with three.js's fields and
+constants — and three.js's numeric values, so a constant carried over from a
+three.js texture means the same thing here:
+
+```typescript
+import { DataTexture, NearestFilter, RepeatWrapping } from "@random-mesh/rmsl/scene";
+
+const texture = new DataTexture(pixels, 16, 16);
+texture.magFilter = NearestFilter;   // square texels, for pixel art
+texture.minFilter = NearestFilter;
+texture.wrapS = RepeatWrapping;      // the image tiles past 1
+texture.wrapT = RepeatWrapping;
+```
+
+- `magFilter`/`minFilter` — `LinearFilter` (the default) or `NearestFilter`.
+- `wrapS`/`wrapT`/`wrapR` — `ClampToEdgeWrapping` (the default),
+  `RepeatWrapping` or `MirroredRepeatWrapping`. `wrapR` is the third axis of a
+  3D texture and is ignored for a 2D one.
+
+Both renderers read these when they upload, so a change made after the first
+render needs `texture.needsUpdate = true` to take effect — the same rule as a
+change to the image.
+
+Three things to know:
+
+- **An integer texture is always read with nearest**, whatever it asks for:
+  `isampler*`/`usampler*` textures are not filterable in either shading
+  language. Wrapping still applies, being a property of the coordinate rather
+  than of the filter.
+- **The mipmapped `minFilter` constants are accepted but treated as their base
+  filter** — `LinearMipmapLinearFilter` samples like `LinearFilter` — because
+  no renderer builds a mip chain yet. That is also why the default `minFilter`
+  is `LinearFilter` rather than three.js's `LinearMipmapLinearFilter`. See
+  [issue #3](https://github.com/big-mesh-studios/rmsl/issues/3).
+- **The CPU target ignores both**, sampling nearest with clamped coordinates
+  whatever the texture says. Tests written with
+  [`@random-mesh/rmsl/test`](testing.md) therefore measure nearest-and-clamped
+  even where a renderer would filter or tile.
 
 ### Texture lifetime
 

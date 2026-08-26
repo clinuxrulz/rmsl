@@ -325,9 +325,11 @@ declares the variables inside the callable instead.
 
 ### Sampling
 
-Float textures sample with nearest-neighbour lookup at normalized coordinates;
-integer textures (`isampler*`/`usampler*`) fetch at texel coordinates. The
-`textureLod` LOD argument is ignored. Data is RGBA in a flat array.
+Float textures sample with nearest-neighbour lookup at normalized coordinates,
+clamped to the edge; integer textures (`isampler*`/`usampler*`) fetch at texel
+coordinates. Filtering and wrapping are not configurable — a scene `Texture`'s
+`magFilter`/`wrapS` and friends are read by the renderers, not by this target —
+and the `textureLod` LOD argument is ignored. Data is RGBA in a flat array.
 
 **8-bit data read through a float sampler comes back as 0–1**, the way it does
 on both backends: an 8-bit texture is uploaded as a normalized format, and the

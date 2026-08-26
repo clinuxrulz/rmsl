@@ -18,6 +18,7 @@ import {
   cameraUniformValue, isIntegerSampler, objectUniformValue, lightsSignature,
   samplerDimension, samplerSampleType, wgslTypeName, toBufferView,
   rendererUniformValue, programSignature, geometryAttribute,
+  samplerState, type SamplerState, type TextureWrap,
 } from "./common";
 
 interface PipelineEntry {
@@ -87,7 +88,13 @@ export class WebGPURenderer {
    */
   private attributeBuffers = new Map<BufferAttribute, GPUBuffer>();
   private textures = new Map<Texture, GPUTexture>();
-  private samplers = new Map<Texture, GPUSampler>();
+  /**
+   * Samplers by the state they were made for, not by texture: a sampler holds
+   * no image, so every texture filtered and wrapped the same way shares one.
+   */
+  private samplers = new Map<string, GPUSampler>();
+  /** The sampler state each texture was last bound with, to notice a change. */
+  private samplerKeys = new Map<Texture, string>();
   private depthTexture: GPUTexture | null = null;
   private depthView: GPUTextureView | null = null;
   private clearColor = new Color(0, 0, 0);
@@ -417,7 +424,7 @@ export class WebGPURenderer {
     }
     for (const s of entry.samplerBindings) {
       const sampler = entry.program.samplers.find((x) => x.name === s.name)!;
-      resources.push({ binding: s.binding, resource: this.ensureSampler(sampler.texture()) });
+      resources.push({ binding: s.binding, resource: this.ensureSampler(sampler.texture(), sampler.type) });
     }
     return this.device.createBindGroup({ layout: entry.bindGroupLayout, entries: resources });
   }
@@ -434,7 +441,14 @@ export class WebGPURenderer {
   private refreshTextures(entry: PipelineEntry): void {
     for (const t of entry.textureBindings) {
       const texture = entry.program.samplers.find((s) => s.name === t.name)!.texture();
-      if (texture?.needsUpdate) this.ensureGpuTexture(texture, t.type);
+      if (!texture?.needsUpdate) continue;
+      // Filtering or wrapping changed with it means a different sampler, and
+      // this bind group holds the old one.
+      const key = samplerKey(samplerState(texture, t.type));
+      if (this.samplerKeys.has(texture) && this.samplerKeys.get(texture) !== key) {
+        this.invalidateBindGroups(texture);
+      }
+      this.ensureGpuTexture(texture, t.type);
     }
   }
 
@@ -449,7 +463,9 @@ export class WebGPURenderer {
     const texture = (event as { target: Texture }).target;
     this.textures.get(texture)?.destroy();
     this.textures.delete(texture);
-    this.samplers.delete(texture);
+    // The sampler is shared with every other texture filtered and wrapped the
+    // same way, so it stays; only this texture's claim on one goes.
+    this.samplerKeys.delete(texture);
     texture.removeEventListener("dispose", this.onTextureDispose);
     this.invalidateBindGroups(texture);
   };
@@ -649,15 +665,22 @@ export class WebGPURenderer {
     return blank;
   }
 
-  private ensureSampler(texture: Texture | null): GPUSampler {
+  /** The sampler that reads this texture the way the texture asks to be read. */
+  private ensureSampler(texture: Texture | null, samplerType = "sampler2D"): GPUSampler {
     const t = texture ?? this.blankTexture();
-    let sampler = this.samplers.get(t);
+    const state = samplerState(t, samplerType);
+    const key = samplerKey(state);
+    this.samplerKeys.set(t, key);
+    let sampler = this.samplers.get(key);
     if (!sampler) {
       sampler = this.device.createSampler({
-        magFilter: "linear",
-        minFilter: "linear",
+        magFilter: state.magFilter,
+        minFilter: state.minFilter,
+        addressModeU: gpuAddressMode(state.wrapS),
+        addressModeV: gpuAddressMode(state.wrapT),
+        addressModeW: gpuAddressMode(state.wrapR),
       });
-      this.samplers.set(t, sampler);
+      this.samplers.set(key, sampler);
     }
     return sampler;
   }
@@ -696,9 +719,24 @@ export class WebGPURenderer {
     this.attributeBuffers.clear();
     this.textures.clear();
     this.samplers.clear();
+    this.samplerKeys.clear();
     this.depthTexture = null;
     this.depthView = null;
   }
+}
+
+/** A wrapping mode as the sampler descriptor's spelling of it. */
+function gpuAddressMode(wrap: TextureWrap): GPUAddressMode {
+  switch (wrap) {
+    case "repeat": return "repeat";
+    case "mirror": return "mirror-repeat";
+    default: return "clamp-to-edge";
+  }
+}
+
+/** One sampler state as a string, so two of them can share a sampler. */
+function samplerKey(state: SamplerState): string {
+  return `${state.magFilter}|${state.minFilter}|${state.wrapS}|${state.wrapT}|${state.wrapR}`;
 }
 
 function vertexFormatFromType(type: string): GPUVertexFormat {

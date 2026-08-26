@@ -13,7 +13,7 @@ import type { NodeMaterial, MaterialProgram } from "../materials/NodeMaterial";
 import { Blending, Side } from "../materials/Material";
 import {
   cameraUniformValue, isIntegerSampler, objectUniformValue, lightsSignature,
-  shaderPrecision, toBufferView,
+  shaderPrecision, toBufferView, samplerState, type TextureWrap,
   rendererUniformValue, programSignature, geometryAttribute,
 } from "./common";
 
@@ -271,13 +271,12 @@ export class WebGLRenderer {
         texture.addEventListener("dispose", this.onTextureDispose);
       }
       gl.bindTexture(target, glTexture);
-      gl.texParameteri(target, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(target, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      if (is3D) gl.texParameteri(target, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
-      // Integer textures are not filterable, so they must use NEAREST.
-      const filter = integer ? gl.NEAREST : gl.LINEAR;
-      gl.texParameteri(target, gl.TEXTURE_MIN_FILTER, filter);
-      gl.texParameteri(target, gl.TEXTURE_MAG_FILTER, filter);
+      const sampling = samplerState(texture, samplerType);
+      gl.texParameteri(target, gl.TEXTURE_WRAP_S, glWrap(gl, sampling.wrapS));
+      gl.texParameteri(target, gl.TEXTURE_WRAP_T, glWrap(gl, sampling.wrapT));
+      if (is3D) gl.texParameteri(target, gl.TEXTURE_WRAP_R, glWrap(gl, sampling.wrapR));
+      gl.texParameteri(target, gl.TEXTURE_MIN_FILTER, glFilter(gl, sampling.minFilter));
+      gl.texParameteri(target, gl.TEXTURE_MAG_FILTER, glFilter(gl, sampling.magFilter));
       const image = texture.image;
       if (ArrayBuffer.isView(image)) {
         const width = (texture as { width?: number }).width ?? 1;
@@ -475,6 +474,20 @@ export class WebGLRenderer {
     this.attributeBuffers.clear();
     this.textures.clear();
   }
+}
+
+/** A wrapping mode as the `texParameteri` constant that sets it. */
+function glWrap(gl: WebGL2RenderingContext, wrap: TextureWrap): number {
+  switch (wrap) {
+    case "repeat": return gl.REPEAT;
+    case "mirror": return gl.MIRRORED_REPEAT;
+    default: return gl.CLAMP_TO_EDGE;
+  }
+}
+
+/** A filter as the `texParameteri` constant that sets it. */
+function glFilter(gl: WebGL2RenderingContext, filter: "nearest" | "linear"): number {
+  return filter === "nearest" ? gl.NEAREST : gl.LINEAR;
 }
 
 /**

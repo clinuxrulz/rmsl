@@ -9,6 +9,11 @@ import { AmbientLight } from "../lights/AmbientLight";
 import { DirectionalLight } from "../lights/DirectionalLight";
 import { PointLight } from "../lights/PointLight";
 import type { NodeMaterial } from "../materials/NodeMaterial";
+import type { Texture } from "../textures/Texture";
+import {
+  MirroredRepeatWrapping, NearestFilter, NearestMipmapLinearFilter,
+  NearestMipmapNearestFilter, RepeatWrapping,
+} from "../textures/constants";
 import type { GLSLPrecision } from "../../rmsl";
 
 /**
@@ -136,6 +141,70 @@ export function wgslTypeName(type: string): string {
     case "mat3": return "mat3x3<f32>";
     case "mat4": return "mat4x4<f32>";
     default: return "f32";
+  }
+}
+
+/**
+ * How a texture is sampled, in terms neither backend's spelling: what to do
+ * between texels, and what to do outside the image.
+ *
+ * Both renderers read the same three.js-style fields off a `Texture` and then
+ * spell the answer their own way — `texParameteri` constants in WebGL, sampler
+ * descriptor strings in WebGPU — so the rule for turning one into the other
+ * lives here once, where it can be tested without a graphics device.
+ */
+export interface SamplerState {
+  magFilter: "nearest" | "linear";
+  minFilter: "nearest" | "linear";
+  wrapS: TextureWrap;
+  wrapT: TextureWrap;
+  wrapR: TextureWrap;
+}
+
+export type TextureWrap = "clamp" | "repeat" | "mirror";
+
+/**
+ * The sampler state a texture asks for, as a sampler of `samplerType` can
+ * honour it.
+ *
+ * An integer texture is not filterable in either language, so it reads with
+ * nearest whatever it asked for. A mipmapped minification filter is treated as
+ * its base filter, because no renderer builds a mip chain: honouring it
+ * literally would leave WebGL with an incomplete texture, which samples as
+ * black — see https://github.com/big-mesh-studios/rmsl/issues/3.
+ */
+export function samplerState(texture: Texture, samplerType: string): SamplerState {
+  const filterable = !isIntegerSampler(samplerType);
+  return {
+    magFilter: filterable ? textureFilter(texture.magFilter) : "nearest",
+    minFilter: filterable ? textureFilter(texture.minFilter) : "nearest",
+    wrapS: textureWrap(texture.wrapS),
+    wrapT: textureWrap(texture.wrapT),
+    wrapR: textureWrap(texture.wrapR),
+  };
+}
+
+/** A `Texture` filter constant as the choice between texels it stands for. */
+function textureFilter(filter: number): "nearest" | "linear" {
+  switch (filter) {
+    case NearestFilter:
+    case NearestMipmapNearestFilter:
+    case NearestMipmapLinearFilter:
+      return "nearest";
+    default:
+      return "linear";
+  }
+}
+
+/** A `Texture` wrapping constant as what it does outside the image. */
+function textureWrap(wrap: number): TextureWrap {
+  switch (wrap) {
+    case RepeatWrapping:
+      return "repeat";
+    case MirroredRepeatWrapping:
+      return "mirror";
+    default:
+      return "clamp";
   }
 }
 

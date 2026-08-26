@@ -247,10 +247,12 @@ is what went unbound.
   between neighbouring pixels, which a single evaluation has no notion of, so
   they read as zero here and an anti-aliased edge reads as a hard one. Pass
   `{ derivatives: "throw" }` to be told rather than quietly given zero.
-- **Sampling is nearest-neighbour**, and `textureLod`'s level is ignored. A
-  bilinear filter is a property of the sampler hardware, not of the graph. The
-  0–255 an 8-bit texture holds does read back as the 0–1 a float sampler gives
-  a shader, so a textured material measures here as it looks on screen.
+- **Sampling is nearest-neighbour with clamped coordinates**, whatever a scene
+  `Texture` sets `magFilter`/`minFilter`/`wrapS`/`wrapT` to, and `textureLod`'s
+  level is ignored. Filtering and wrapping belong to the sampler, which the CPU
+  has none of, so a material that tiles or blends its texture on screen does
+  neither here. What *does* carry over is the range: the 0–255 an 8-bit texture
+  holds reads back as the 0–1 a float sampler gives a shader.
 - **The CPU computes f64, a GPU f32.** Results can differ in the last bits,
   which is what the tolerance is for. A test that must pin f32 behaviour still
   belongs on a device.

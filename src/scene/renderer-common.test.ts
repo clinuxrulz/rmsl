@@ -2,13 +2,16 @@ import { describe, it, expect } from "vitest";
 import { wgslUniformLayout } from "../rmsl";
 import {
   Scene, Mesh, InstancedMesh, BoxGeometry, MeshStandardMaterial,
-  MeshBasicMaterial,
+  MeshBasicMaterial, Texture,
   AmbientLight, DirectionalLight, PointLight,
   PerspectiveCamera, Vector3, Matrix4, Matrix3, Color,
+  NearestFilter, LinearFilter, RepeatWrapping, MirroredRepeatWrapping,
+  LinearMipmapLinearFilter, LinearMipmapNearestFilter,
+  NearestMipmapLinearFilter, NearestMipmapNearestFilter,
 } from "./index";
 import {
   cameraUniformValue, objectUniformValue, lightsSignature, wgslTypeName,
-  isIntegerSampler, samplerSampleType, samplerDimension,
+  isIntegerSampler, samplerSampleType, samplerDimension, samplerState,
   uniformUploadValue, programSignature, geometryAttribute,
 } from "./renderers/common";
 import { BufferAttribute } from "./geometries/BufferAttribute";
@@ -46,6 +49,64 @@ describe("objectUniformValue", () => {
     // A scaled matrix's normal matrix is the inverse-transpose of its 3x3.
     const expected = new Matrix3().getNormalMatrix(mesh.matrixWorld).toArray();
     expect(normal).toEqual(expected);
+  });
+});
+
+describe("samplerState", () => {
+  it("defaults to linear filtering and clamped edges", () => {
+    expect(samplerState(new Texture(), "sampler2D")).toEqual({
+      magFilter: "linear",
+      minFilter: "linear",
+      wrapS: "clamp",
+      wrapT: "clamp",
+      wrapR: "clamp",
+    });
+  });
+
+  it("carries what the texture asks for", () => {
+    const texture = new Texture();
+    texture.magFilter = NearestFilter;
+    texture.minFilter = NearestFilter;
+    texture.wrapS = RepeatWrapping;
+    texture.wrapT = MirroredRepeatWrapping;
+    const state = samplerState(texture, "sampler2D");
+    expect(state.magFilter).toBe("nearest");
+    expect(state.minFilter).toBe("nearest");
+    expect(state.wrapS).toBe("repeat");
+    expect(state.wrapT).toBe("mirror");
+  });
+
+  it("reads a mipmapped filter as its base filter", () => {
+    const texture = new Texture();
+    // No renderer builds a mip chain yet, and honouring these literally leaves
+    // WebGL with an incomplete texture, which samples as black.
+    texture.minFilter = LinearMipmapLinearFilter;
+    expect(samplerState(texture, "sampler2D").minFilter).toBe("linear");
+    texture.minFilter = NearestMipmapLinearFilter;
+    expect(samplerState(texture, "sampler2D").minFilter).toBe("nearest");
+    texture.minFilter = NearestMipmapNearestFilter;
+    expect(samplerState(texture, "sampler2D").minFilter).toBe("nearest");
+    texture.minFilter = LinearMipmapNearestFilter;
+    expect(samplerState(texture, "sampler2D").minFilter).toBe("linear");
+  });
+
+  it("holds an integer texture to nearest, whatever it asked for", () => {
+    const texture = new Texture();
+    texture.magFilter = LinearFilter;
+    texture.minFilter = LinearFilter;
+    texture.wrapS = RepeatWrapping;
+    // An integer texture is not filterable in either language — but it still
+    // wraps, which is a property of the coordinate, not of the filter.
+    const state = samplerState(texture, "usampler2D");
+    expect(state.magFilter).toBe("nearest");
+    expect(state.minFilter).toBe("nearest");
+    expect(state.wrapS).toBe("repeat");
+  });
+
+  it("treats a wrapping mode it does not know as clamped", () => {
+    const texture = new Texture();
+    texture.wrapS = 99999;
+    expect(samplerState(texture, "sampler2D").wrapS).toBe("clamp");
   });
 });
 
