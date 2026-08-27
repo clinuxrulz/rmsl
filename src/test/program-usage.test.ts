@@ -129,6 +129,53 @@ describe("fromProgram", () => {
     expect(blended[2]).toBeGreaterThan(0.4);
   });
 
+  it("hands a vertex stage's varyings back under the program's names", () => {
+    const material = new MeshBasicMaterial({ color: 0xffffff });
+    material.map = new DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+    const program = build(material);
+    const project = fromProgram(program, { stage: "vertex" });
+    const written = project({ attributes: { uv: [0.25, 0.75], position: [0, 0, 0], normal: [0, 0, 1] } });
+
+    // What went in by name comes back by name: nothing here has to look
+    // `_rmsl_v1` up in the program to read the varying it just wrote.
+    expect(Object.keys(written.varyings)).toContain("uv");
+    expect(written.varyings.uv).toEqual([0.25, 0.75]);
+  });
+
+  it("says which input it wanted when nothing bound one", () => {
+    const project = fromProgram(build(new MeshBasicMaterial()), { stage: "vertex" });
+    // The vertex stage transforms the normal, and nothing here handed it one.
+    // What used to come out of this is a TypeError inside a matrix multiply.
+    expect(() => project({ attributes: { position: [0, 0, 0], uv: [0, 0] } }))
+      .toThrow(/vertex stage reads the attribute "normal".*attributes/s);
+
+    const shade = fromProgram(build(new MeshStandardMaterial()));
+    expect(() => shade({ varyings: { normalWorld: [0, 1, 0] } }))
+      .toThrow(/fragment stage reads the varying "positionWorld"/);
+  });
+
+  it("points at `unbound` for an input the program was meant to bring", () => {
+    const stray = uniform("float");
+    const program = build(new MeshBasicMaterial());
+    const withStray = {
+      ...program,
+      fragmentRoot: vec4(program.fragmentRoot.rgb.mul(stray), 1),
+      uniforms: [...program.uniforms, { name: "stray", node: stray, scope: "material" }],
+    };
+    // Shading with an undefined uniform used to give a colour of NaN, which
+    // says nothing about where it came from.
+    expect(() => fromProgram(withStray)()).toThrow(/the uniform "stray".*`unbound`/s);
+  });
+
+  it("counts a sampler with no pixels behind it as unbound", () => {
+    const material = new MeshBasicMaterial({ color: 0xffffff });
+    // What a texture loaded from a URL looks like with no browser to load it.
+    material.map = { image: undefined, width: 0, height: 0 } as never;
+    const shade = fromProgram(build(material));
+    expect(shade.unbound).toContain("map");
+    expect(() => shade({ varyings: { uv: [0, 0] } })).toThrow(/the texture "map"/);
+  });
+
   it("refuses a stage the program has no root for", () => {
     const program = build(new MeshBasicMaterial());
     expect(() => fromProgram({ fragmentRoot: program.fragmentRoot }, { stage: "vertex" }))

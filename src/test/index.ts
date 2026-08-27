@@ -117,7 +117,11 @@ export interface EvaluationResult<A extends ShaderType = ShaderType> {
   discarded: boolean;
   /** Values written with `output()`, by slot name. */
   outputs: Record<string, unknown>;
-  /** Values written with `varying()` in a vertex stage, by slot name. */
+  /**
+   * Values written with `varying()` in a vertex stage, keyed the way they are
+   * passed in: by the program's own name under `fromProgram`, by the node's
+   * name otherwise.
+   */
   varyings: Record<string, unknown>;
   /** Written with `builtinPosition()`. */
   position?: number[];
@@ -180,8 +184,18 @@ function compileRunner<A extends ShaderType>(
   const callable = compileJS(graph, compileOptions);
   const source = compileJSFn(graph, compileOptions);
 
+  // The program's names, the other way round. A slot goes in under the name the
+  // program calls it, so that is the name a result comes back under, and the
+  // name to say out loud when nothing bound it.
+  const called: NameMaps = {
+    uniforms: reverseNames(names?.uniforms),
+    varyings: reverseNames(names?.varyings),
+    attributes: reverseNames(names?.attributes),
+    textures: reverseNames(names?.textures),
+  };
+  const reads = { stage: compileOptions.stage, named: names !== undefined, names: called };
   const run = (inputs: ShaderInputs = {}): EvaluationResult<A> =>
-    readResult<A>(callable(mergeContext(options, inputs, names)));
+    readResult<A>(callable(mergeContext(options, inputs, names, reads)), called.varyings);
   return Object.defineProperties(run, {
     source: { value: source, enumerable: true },
     [RUNNER]: { value: true },
@@ -259,8 +273,13 @@ export interface RenderedImage {
    * The image as text, one character per fragment by brightness — a shader
    * snapshot that reads in a terminal diff. The top line is the top row of the
    * image; pass `{ flipY: true }` to print from `y = 0` instead.
+   *
+   * Brightness is the fragment composited over black, so a shape that lives in
+   * alpha — a particle, a billboard, anything the blender fades out — reads as
+   * the shape it is rather than a flat block. Pass `{ alpha: false }` to weigh
+   * the colour channels alone.
    */
-  toAscii(options?: { ramp?: string; flipY?: boolean }): string;
+  toAscii(options?: { ramp?: string; flipY?: boolean; alpha?: boolean }): string;
 }
 
 const DEFAULT_RAMP = " .:-=+*#%@";
@@ -336,16 +355,19 @@ function image(
       }
       return out;
     },
-    toAscii({ ramp = DEFAULT_RAMP, flipY = false } = {}) {
+    toAscii({ ramp = DEFAULT_RAMP, flipY = false, alpha = true } = {}) {
       const lines: string[] = [];
       for (let y = 0; y < height; y++) {
         const row = flipY ? y : height - 1 - y;
         let line = "";
         for (let x = 0; x < width; x++) {
           const base = (row * width + x) * 4;
-          // Rec. 709 luminance, the weighting a monitor's channels carry.
+          // Rec. 709 luminance, the weighting a monitor's channels carry, over
+          // a black background — which is what makes a shape drawn in alpha,
+          // and nothing else, visible here at all.
           const luma = 0.2126 * pixels[base] + 0.7152 * pixels[base + 1] + 0.0722 * pixels[base + 2];
-          const step = Math.round(Math.min(1, Math.max(0, luma)) * (ramp.length - 1));
+          const coverage = alpha ? Math.min(1, Math.max(0, pixels[base + 3])) : 1;
+          const step = Math.round(Math.min(1, Math.max(0, luma)) * coverage * (ramp.length - 1));
           line += ramp[step];
         }
         lines.push(line);
@@ -410,10 +432,14 @@ export interface ProgramOptions extends RunnerOptions {
 /** A shader compiled from a program, with the names it was built under. */
 export interface ProgramRunner extends ShaderRunner<"vec4"> {
   /**
-   * Uniforms nothing filled in — neither the program, nor a built-in default,
-   * nor the options. Reading one of these gives `undefined`, and arithmetic on
-   * it gives `NaN`, so this is the first place to look when a result is not a
-   * number.
+   * Uniforms — and samplers — nothing filled in: neither the program, nor a
+   * built-in default, nor the options. These are the inputs a program is
+   * expected to bring with it, so a name here is usually a missing piece of the
+   * material rather than something the caller forgot; an attribute or a varying
+   * belongs to the call instead, and is reported when the shader reads it.
+   *
+   * A shader that reads one of these throws rather than shading with
+   * `undefined`, so this is the list to check before calling.
    */
   readonly unbound: string[];
 }
@@ -455,16 +481,20 @@ export function fromProgram(program: ProgramLike, options: ProgramOptions = {}):
     else uniforms[binding.node.name] = value;
   }
 
+  const passed = textureSlots(names.textures, options.textures);
   const textures: Record<string, TextureData> = {};
   for (const sampler of program.samplers ?? []) {
+    if (sampler.node.name in passed) continue;
     const texture = toTextureData(sampler.texture?.());
+    // A sampler pointing at nothing, or at an image only a browser could read.
     if (texture) textures[sampler.node.name] = texture;
+    else unbound.push(sampler.name);
   }
 
   const run = compileRunner<"vec4">(() => root, {
     ...options,
     uniforms: { ...uniforms, ...given },
-    textures: { ...textures, ...textureSlots(names.textures, options.textures) },
+    textures: { ...textures, ...passed },
   }, names);
 
   return Object.defineProperties(run, {
@@ -710,19 +740,72 @@ function asRunner<A extends ShaderType>(
     : runner(graph as () => Node<A>, options);
 }
 
+/** What a shader is, for the sake of saying which input it wanted. */
+interface ReadContext {
+  stage: string;
+  /** Whether a program's names are in play, and so whether `unbound` exists. */
+  named: boolean;
+  /** The name to report each slot under. */
+  names: NameMaps;
+}
+
 /** Slot-keyed context for the compiled callable, defaults under the call's own. */
 function mergeContext(
   defaults: ShaderInputs,
   inputs: ShaderInputs,
-  names?: NameMaps,
+  names: NameMaps | undefined,
+  reads: ReadContext,
 ): JsShaderContext {
   return {
-    uniforms: slots(names?.uniforms, defaults.uniforms, inputs.uniforms),
-    varyings: slots(names?.varyings, defaults.varyings, inputs.varyings),
-    attributes: slots(names?.attributes, defaults.attributes, inputs.attributes),
-    textures: textureSlots(names?.textures, defaults.textures, inputs.textures),
+    uniforms: bound("uniform", "uniforms",
+      slots(names?.uniforms, defaults.uniforms, inputs.uniforms), reads),
+    varyings: bound("varying", "varyings",
+      slots(names?.varyings, defaults.varyings, inputs.varyings), reads),
+    attributes: bound("attribute", "attributes",
+      slots(names?.attributes, defaults.attributes, inputs.attributes), reads),
+    textures: bound("texture", "textures",
+      textureSlots(names?.textures, defaults.textures, inputs.textures), reads),
     fragCoord: (inputs.fragCoord ?? defaults.fragCoord) as [number, number] | undefined,
   };
+}
+
+/**
+ * The bound values, with a missing one reported where the shader reads it.
+ *
+ * Nothing here can know in advance which slots a shader reads: a read can sit
+ * inside an `If` whose branch this fragment does not take, so a list drawn up
+ * before the call would name inputs that are never wanted. Reporting at the
+ * read itself names exactly the input this evaluation asked for — and it lands
+ * on the missing value rather than three frames later on the `NaN` or the
+ * `undefined[0]` it turns into.
+ */
+function bound<A extends object>(
+  kind: string,
+  field: keyof ShaderInputs,
+  values: A,
+  reads: ReadContext,
+): A {
+  return new Proxy(values, {
+    get(target, key) {
+      // `in`, not `undefined`: an inherited `toString` is how a debugger or a
+      // test reporter looks at this object, and it is not a missing input.
+      if (typeof key === "string" && !(key in target)) {
+        const name = reads.names[field as keyof NameMaps]?.get(key);
+        // Without a program there is no name but the generated slot, and a
+        // generated name is no use to bind by: point at the node instead.
+        const wanted = name
+          ? `reads the ${kind} "${name}", which nothing bound. `
+            + `Pass it under \`${field}\`.`
+          : `reads a ${kind} nothing bound, in the slot the compiler generated `
+            + `as "${key}". Pass its node under \`${field}\`, as [node, value].`;
+        const listed = reads.named && field === "uniforms"
+          ? " It is listed in the runner's `unbound`."
+          : "";
+        throw new Error(`[RMSL/test] the ${reads.stage} stage ${wanted}${listed}`);
+      }
+      return (target as Record<string, unknown>)[key as string];
+    },
+  });
 }
 
 function slots(
@@ -761,12 +844,36 @@ function textureSlots(
   return record;
 }
 
+/** A program's names by the slot each points at, for reading a result back. */
+function reverseNames(names: Map<string, string> | undefined): Map<string, string> | undefined {
+  if (!names) return undefined;
+  const back = new Map<string, string>();
+  // First name wins: a slot two names point at is read under the first one.
+  for (const [name, slot] of names) if (!back.has(slot)) back.set(slot, name);
+  return back;
+}
+
+/** Values re-keyed from generated slot names to the program's own names. */
+function named(
+  values: Record<string, unknown> | undefined,
+  names: Map<string, string> | undefined,
+): Record<string, unknown> {
+  if (!values) return {};
+  if (!names) return values;
+  const record: Record<string, unknown> = {};
+  for (const [slot, value] of Object.entries(values)) record[names.get(slot) ?? slot] = value;
+  return record;
+}
+
 /**
  * The compiled callable's return value in one shape. It returns the graph's
  * value directly unless the program writes an output, a position or a fragment
  * depth, and `null` for a discarded fragment.
  */
-function readResult<A extends ShaderType>(raw: unknown): EvaluationResult<A> {
+function readResult<A extends ShaderType>(
+  raw: unknown,
+  varyingNames?: Map<string, string>,
+): EvaluationResult<A> {
   if (raw === null) {
     return { value: null, discarded: true, outputs: {}, varyings: {} };
   }
@@ -775,7 +882,7 @@ function readResult<A extends ShaderType>(raw: unknown): EvaluationResult<A> {
       value: (raw.value ?? null) as ShaderValue<A> | null,
       discarded: false,
       outputs: raw.outputs ?? {},
-      varyings: raw.varyings ?? {},
+      varyings: named(raw.varyings, varyingNames),
       position: raw.position,
       fragDepth: raw.fragDepth,
     };

@@ -69,7 +69,7 @@ The result is one object however the graph is written:
   value,      // what the graph returns, or null for a discarded fragment
   discarded,  // whether the fragment hit Discard()
   outputs,    // written with output(), by slot
-  varyings,   // written with varying() in a vertex stage, by slot
+  varyings,   // written with varying() in a vertex stage, by name
   position,   // written with builtinPosition()
   fragDepth,  // written with builtinFragDepth()
 }
@@ -131,6 +131,10 @@ render(() => vec4(vec3(disc), 1), { width: 24, height: 12 }).toAscii();
 Handed to `toMatchInlineSnapshot`, that is a shader regression test whose diff
 is readable: a shifted edge shows up as a shifted edge.
 
+Brightness is the fragment composited over black, so a shape that lives in alpha
+— a particle, a billboard, anything the blender fades out — reads as the shape it
+is rather than a flat block. `{ alpha: false }` weighs the colour channels alone.
+
 Rows run bottom-up, as `fragCoord` counts: `pixels` starts at `y = 0`, and
 `toAscii` prints the top row of the image first. Both `toAscii` and `toUint8`
 take `{ flipY: true }` for the top-down order image formats want.
@@ -179,8 +183,24 @@ fromProgram(program, {
 });
 ```
 
-`shade.unbound` lists the uniforms nothing filled in — the first place to look
-when a result comes back `NaN`.
+`shade.unbound` lists the uniforms and samplers nothing filled in — the inputs a
+program is expected to bring with it, so a name here is usually a missing piece
+of the material rather than something the caller forgot.
+
+An input the shader reads and nothing bound is reported where it is read:
+
+```
+[RMSL/test] the vertex stage reads the attribute "normal", which nothing bound.
+Pass it under `attributes`.
+```
+
+That covers what a list drawn up beforehand cannot: an attribute or a varying
+belongs to the call rather than to the program, and a read can sit inside an
+`If` whose branch this fragment does not take. Nothing shades with `undefined`.
+
+The names hold on the way out as well: a vertex stage's varyings come back under
+the program's names, so what a stage wrote is `project(...).varyings.uv` rather
+than a generated slot name looked up in `program.varyings`.
 
 A runner from a program is a runner like any other, so `render` drives it:
 
@@ -238,8 +258,8 @@ render(() => graph, { width: 8, height: 8, uniforms: [[resolution, [8, 8]]] });
 ```
 
 `uniformsIn(graph)` without a type lists every uniform the graph reads, in the
-order it reaches them — useful when a result comes back `NaN` and the question
-is what went unbound.
+order it reaches them — which is where to look when a graph reports a uniform
+nothing bound and the node it names was never yours to bind.
 
 ## What the CPU cannot tell you
 

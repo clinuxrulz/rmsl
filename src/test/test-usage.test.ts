@@ -199,6 +199,24 @@ describe("render", () => {
     `);
   });
 
+  it("names the slot when a graph reads an input nothing bound", () => {
+    const fade = varying("float");
+    // No program, so there is no name but the generated slot — which is still
+    // better than the NaN this used to shade with.
+    expect(() => evaluate(() => vec4(vec3(1), fade)))
+      .toThrow(/fragment stage reads a varying nothing bound.*\[node, value\]/s);
+  });
+
+  it("draws a shape that lives in alpha", () => {
+    // A particle: white everywhere, its shape carried entirely by alpha. Over
+    // black that is the disc it draws; on the colour channels alone it is a
+    // flat block, which is what `{ alpha: false }` asks for.
+    const coverage = step(float(4), fragCoord().x);
+    const image = render(() => vec4(vec3(1), coverage), { width: 8, height: 1 });
+    expect(image.toAscii({ ramp: ".#" })).toBe("....####");
+    expect(image.toAscii({ ramp: ".#", alpha: false })).toBe("########");
+  });
+
   it("prints from the bottom row up, and the other way round on request", () => {
     const graph = vec4(vec3(step(float(1), fragCoord().y)), 1);
     const image = render(() => graph, { width: 2, height: 2 });
