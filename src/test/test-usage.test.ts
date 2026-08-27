@@ -6,10 +6,14 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  Fn, If, Discard, float, vec2, vec3, vec4, ivec2,
+  Fn, If, Discard, float, vec2, vec3, vec4, ivec2, uvec3,
   uniform, varying, attribute, output, builtinPosition, builtinFragDepth,
   fragCoord, mix, step, uv, length, smoothstep,
 } from "../rmsl";
+import { DataTexture } from "../scene/textures/DataTexture";
+import {
+  LinearFilter, NearestMipmapNearestFilter, RedIntegerFormat,
+} from "../scene/textures/constants";
 import {
   evaluate, render, runner, uniformsIn,
   approx, assertClose, closeTo, tolerance,
@@ -68,6 +72,34 @@ describe("evaluate", () => {
     const image = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
     const result = evaluate(() => graph, { textures: [[map, { image, width: 2, height: 2 }]] });
     expect(result.value).toEqual([5, 6, 7, 8]);
+  });
+
+  it("reads a single-channel DataTexture a texel at a time", () => {
+    const map = uniform("usampler3D");
+    const graph = map.texture(uvec3(1, 1, 0));
+    // A voxel volume, one byte a voxel: the format is what says where one texel
+    // ends and the next begins, and green, blue and alpha read as a sampler
+    // reports the channels the texture does not store.
+    const image = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    const volume = new DataTexture(image, 2, 2, 2, RedIntegerFormat);
+    const result = evaluate(() => graph, { textures: [[map, volume]] });
+    expect(result.value).toEqual([4, 0, 0, 1]);
+  });
+
+  it("samples a scene texture the way the renderers read it", () => {
+    const map = uniform("sampler2D");
+    const graph = map.texture(vec2(0.5, 0.5));
+    const texture = new DataTexture(new Uint8Array([0, 0, 0, 0, 255, 255, 255, 255]), 2, 1);
+    // Two texels, black and white, sampled halfway between their centres. What
+    // that returns is the texture's own filtering — and a mipmapped spelling
+    // counts as its base filter, which is `samplerState`'s rule, not a second
+    // one written here.
+    texture.magFilter = LinearFilter;
+    expect(evaluate(() => graph, { textures: [[map, texture]] }).value)
+      .toEqual([0.5, 0.5, 0.5, 0.5]);
+    texture.magFilter = NearestMipmapNearestFilter;
+    expect(evaluate(() => graph, { textures: [[map, texture]] }).value)
+      .toEqual([1, 1, 1, 1]);
   });
 
   it("reports a discarded fragment rather than a bare null", () => {

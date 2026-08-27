@@ -634,6 +634,35 @@ describe("JS backend: CPU-specific behaviour", () => {
       .toEqual([0, 128, 255, 255]);
   });
 
+  it("strides by the channels a texel holds, not by four", () => {
+    let tex!: any;
+    const prog = Fn(() => {
+      tex = uniform("usampler2D");
+      return tex.texture(ivec2(2, 0));
+    })();
+    const fn = compileJS(() => prog, { name: "main", params: [] });
+    // Four single-channel texels in a row: the third is 30. Read as RGBA, the
+    // same array is one texel and the fetch falls off the end of it.
+    const data = new Uint8Array([10, 20, 30, 40]);
+    expect(fn({ textures: { [tex.name]: { data, width: 4, height: 1, channels: 1 } } }))
+      // green and blue read zero, alpha one, as a sampler reports the channels
+      // a single-channel texture does not store
+      .toEqual([30, 0, 0, 1]);
+  });
+
+  it("blends a single-channel texture without reading its neighbours' channels", () => {
+    let tex!: any;
+    const prog = Fn(() => {
+      tex = uniform("sampler2D");
+      return tex.texture(vec2(0.5, 0.5));
+    })();
+    const fn = compileJS(() => prog, { name: "main", params: [] });
+    const texture = { data: [0, 100], width: 2, height: 1, channels: 1 as const };
+    expect(fn({ textures: { [tex.name]: texture } })).toEqual([100, 0, 0, 1]);
+    expect(fn({ textures: { [tex.name]: { ...texture, magFilter: "linear" as const } } }))
+      .toEqual([50, 0, 0, 1]);
+  });
+
   it("normalizes a byte texture fetched with textureLoad too", () => {
     let tex!: any;
     const prog = Fn(() => {
@@ -659,7 +688,7 @@ describe("JS backend: CPU-specific behaviour", () => {
     const data = [0, 0, 0, 0, 100, 100, 100, 100];
     const texture = { data, width: 2, height: 1 };
     expect(fn({ textures: { [tex.name]: texture } })).toEqual([100, 100, 100, 100]);
-    expect(fn({ textures: { [tex.name]: { ...texture, filter: "linear" as const } } }))
+    expect(fn({ textures: { [tex.name]: { ...texture, magFilter: "linear" as const } } }))
       .toEqual([50, 50, 50, 50]);
   });
 
@@ -708,7 +737,7 @@ describe("JS backend: CPU-specific behaviour", () => {
       width: 1,
       height: 1,
       depth: 2,
-      filter: "linear",
+      magFilter: "linear",
     };
     expect(fn({ textures: { [tex.name]: texture } })).toEqual([50, 50, 50, 50]);
   });

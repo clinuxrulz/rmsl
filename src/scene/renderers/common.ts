@@ -12,7 +12,7 @@ import type { NodeMaterial } from "../materials/NodeMaterial";
 import type { Texture } from "../textures/Texture";
 import {
   MirroredRepeatWrapping, NearestFilter, NearestMipmapLinearFilter,
-  NearestMipmapNearestFilter, RepeatWrapping,
+  NearestMipmapNearestFilter, RedIntegerFormat, RepeatWrapping,
 } from "../textures/constants";
 import type { GLSLPrecision } from "../../rmsl";
 
@@ -182,6 +182,19 @@ export function samplerState(texture: Texture, samplerType: string): SamplerStat
     wrapT: textureWrap(texture.wrapT),
     wrapR: textureWrap(texture.wrapR),
   };
+}
+
+/**
+ * How many channels a texel of `texture` holds, which is what says where one
+ * texel ends and the next begins.
+ *
+ * A `RedIntegerFormat` view is single-channel — `R8UI` in WebGL, `r8uint` in
+ * WebGPU, one byte a texel on the CPU — and every other format is four. The
+ * channels a texel does not store read as a sampler reports them: zero for
+ * green and blue, one for alpha.
+ */
+export function textureChannels(texture: Texture): 1 | 4 {
+  return (texture as { format?: number }).format === RedIntegerFormat ? 1 : 4;
 }
 
 /** A `Texture` filter constant as the choice between texels it stands for. */

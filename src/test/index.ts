@@ -24,11 +24,13 @@
 import {
   compileJS, compileJSFn,
   type Node, type ShaderType, type VariableNode,
-  type JsShaderContext, type JsTextureData, type JsTextureWrap,
+  type JsShaderContext, type JsTextureData,
 } from "../rmsl";
-// Numbers, not the scene graph: a texture written for a renderer says how it
-// wants to be read in three.js's constants, and the CPU target takes names.
-import { MirroredRepeatWrapping, NearestFilter, RepeatWrapping } from "../scene/textures/constants";
+// How a texture asks to be read is the renderers' question too, and they
+// already answer it without a device — so a shader tested here samples by the
+// same reading, not by a second one written for the CPU.
+import { samplerState, textureChannels } from "../scene/renderers/common";
+import type { Texture } from "../scene/textures/Texture";
 
 // === Values ===
 
@@ -47,14 +49,21 @@ export type ShaderValue<A extends ShaderType> =
 
 /**
  * Texture data to sample from. A scene `DataTexture` fits as it stands: its
- * `image` is read when `data` is absent, and its three.js filtering and
- * wrapping constants are read as the CPU target's names for them.
+ * `image` is read when `data` is absent, and its three.js format, filtering
+ * and wrapping constants are read as the CPU target's names for them.
  */
 export type TextureData = JsTextureData | {
-  image: ArrayLike<number>;
+  /**
+   * Pixels as a scene texture carries them, which is where a `DataTexture`
+   * keeps its data. The sources only a browser could decode — an
+   * `HTMLImageElement`, a canvas — are part of that type and are refused when
+   * the texture is bound, since there is nothing here to read them with.
+   */
+  image: Texture["image"] | ArrayLike<number>;
   width: number;
   height: number;
   depth?: number;
+  format?: number;
   magFilter?: number;
   minFilter?: number;
   wrapS?: number;
@@ -485,7 +494,7 @@ export function fromProgram(program: ProgramLike, options: ProgramOptions = {}):
   const textures: Record<string, TextureData> = {};
   for (const sampler of program.samplers ?? []) {
     if (sampler.node.name in passed) continue;
-    const texture = toTextureData(sampler.texture?.());
+    const texture = toTextureData(sampler.texture?.(), sampler.type);
     // A sampler pointing at nothing, or at an image only a browser could read.
     if (texture) textures[sampler.node.name] = texture;
     else unbound.push(sampler.name);
@@ -555,58 +564,43 @@ const RENDERER_DEFAULTS: Record<string, unknown> = {
 };
 
 /**
- * A texture the CPU target can sample, from whatever it was handed: data under
- * `data` or under `image`, and sampling stated either in the CPU target's own
- * names or in the three.js constants a scene texture carries.
+ * A texture the CPU target can sample, from whatever it was handed. A scene
+ * texture fits as it stands — its pixels sit under `image` rather than `data`,
+ * and its format, filtering and wrapping are the constants the target samples
+ * by — so nothing here restates what the texture already says.
  *
  * Null when there are no pixels to read — an `HTMLImageElement` or a canvas is
  * nothing without a browser, and a sampler bound to one is left unbound rather
  * than bound to something empty.
  */
-function toTextureData(texture: unknown): JsTextureData | null {
+function toTextureData(texture: unknown, samplerType = "sampler2D"): JsTextureData | null {
   if (typeof texture !== "object" || texture === null) return null;
-  const candidate = texture as {
-    image?: unknown; data?: unknown; width?: number; height?: number; depth?: number;
-    filter?: "nearest" | "linear"; magFilter?: number;
-    wrapS?: unknown; wrapT?: unknown; wrapR?: unknown;
-  };
+  const candidate = texture as Record<string, unknown>;
   const pixels = candidate.data ?? candidate.image;
   if (!ArrayBuffer.isView(pixels) && !Array.isArray(pixels)) return null;
   if (typeof candidate.width !== "number" || typeof candidate.height !== "number") return null;
+  const image = { data: pixels as ArrayLike<number>, width: candidate.width, height: candidate.height };
+  if (!statesTextureConstants(candidate)) {
+    return { ...(candidate as unknown as JsTextureData), ...image };
+  }
+  const scene = texture as Texture;
   return {
-    data: pixels as ArrayLike<number>,
-    width: candidate.width,
-    height: candidate.height,
-    depth: candidate.depth,
-    filter: candidate.filter ?? textureFilter(candidate.magFilter),
-    wrapS: textureWrap(candidate.wrapS),
-    wrapT: textureWrap(candidate.wrapT),
-    wrapR: textureWrap(candidate.wrapR),
+    ...image,
+    depth: candidate.depth as number | undefined,
+    channels: textureChannels(scene),
+    ...samplerState(scene, samplerType),
   };
 }
 
 /**
- * A scene texture's filtering constant as the CPU target's name for it. The
- * magnification filter is the one taken: choosing the other needs the footprint
- * of the pixel being shaded, which a single evaluation has no way to know.
+ * Whether a texture states how it is read in three.js constants — what a scene
+ * texture carries — rather than in the words the CPU target samples by.
  */
-function textureFilter(magFilter: number | undefined): "nearest" | "linear" {
-  if (magFilter === undefined || magFilter === NearestFilter) return "nearest";
-  return "linear";
-}
-
-/** A wrapping mode as the CPU target's name for it, given either spelling. */
-function textureWrap(wrap: unknown): JsTextureWrap {
-  switch (wrap) {
-    case RepeatWrapping:
-    case "repeat":
-      return "repeat";
-    case MirroredRepeatWrapping:
-    case "mirror":
-      return "mirror";
-    default:
-      return "clamp";
-  }
+function statesTextureConstants(texture: Record<string, unknown>): boolean {
+  return texture.isTexture === true
+    || typeof texture.format === "number"
+    || typeof texture.magFilter === "number"
+    || typeof texture.wrapS === "number";
 }
 
 /**

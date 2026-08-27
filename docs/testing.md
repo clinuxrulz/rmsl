@@ -60,7 +60,8 @@ through a render.
 | `sampler2D`/`sampler3D` and integer variants | `{ data, width, height, depth? }` under `textures` |
 
 Texture data may also arrive as `{ image, width, height }`, which is the shape a
-scene `DataTexture` already has.
+scene `DataTexture` already has. Its `format` comes with it, so a single-channel
+volume is read a byte a texel rather than four.
 
 The result is one object however the graph is written:
 
@@ -267,11 +268,13 @@ nothing bound and the node it names was never yours to bind.
   between neighbouring pixels, which a single evaluation has no notion of, so
   they read as zero here and an anti-aliased edge reads as a hard one. Pass
   `{ derivatives: "throw" }` to be told rather than quietly given zero.
-- **Sampling follows the texture**: a scene `Texture`'s `magFilter` and
-  `wrapS`/`wrapT` are honoured, and the 0–255 an 8-bit texture holds reads back
-  as the 0–1 a float sampler gives a shader — so a textured material measures
-  here as it looks on screen. Give a texture of your own `filter: "linear"` and
-  `wrapS: "repeat"` to say the same thing. What is missing is the mip chain:
+- **Sampling follows the texture**: a scene `Texture`'s `format`, `magFilter`
+  and `wrapS`/`wrapT` are read by the same rules the renderers read them by, and
+  the 0–255 an 8-bit texture holds reads back as the 0–1 a float sampler gives a
+  shader — so a textured material measures here as it looks on screen. Give a
+  texture of your own `channels: 1`, `magFilter: "linear"` and
+  `wrapS: "repeat"` to say the same thing directly. What is missing is the mip
+  chain:
   `textureLod`'s level is ignored, and a minification filter has no footprint to
   be chosen by.
 - **The CPU computes f64, a GPU f32.** Results can differ in the last bits,

@@ -8,12 +8,11 @@ import type { InstancedMesh } from "../objects/InstancedMesh";
 import type { BufferGeometry } from "../geometries/BufferGeometry";
 import type { BufferAttribute } from "../geometries/BufferAttribute";
 import type { Texture } from "../textures/Texture";
-import { RedIntegerFormat } from "../textures/constants";
 import type { NodeMaterial, MaterialProgram } from "../materials/NodeMaterial";
 import { Blending, Side } from "../materials/Material";
 import {
   cameraUniformValue, isIntegerSampler, objectUniformValue, lightsSignature,
-  shaderPrecision, toBufferView, samplerState, type TextureWrap,
+  shaderPrecision, toBufferView, samplerState, textureChannels, type TextureWrap,
   rendererUniformValue, programSignature, geometryAttribute,
 } from "./common";
 
@@ -282,7 +281,7 @@ export class WebGLRenderer {
         const width = (texture as { width?: number }).width ?? 1;
         const height = (texture as { height?: number }).height ?? 1;
         if (integer) {
-          const singleChannel = (texture as { format?: number }).format === RedIntegerFormat;
+          const singleChannel = textureChannels(texture) === 1;
           const { internalFormat, format, type } = integerInternalFormat(gl, samplerType.startsWith("isampler"), image, singleChannel);
           if (is3D) {
             const depth = (texture as { depth?: number }).depth ?? 1;

@@ -10,7 +10,6 @@ import type { BufferGeometry } from "../geometries/BufferGeometry";
 import type { BufferAttribute } from "../geometries/BufferAttribute";
 import type { Texture } from "../textures/Texture";
 import { DataTexture } from "../textures/DataTexture";
-import { RedIntegerFormat } from "../textures/constants";
 import type { NodeMaterial, MaterialProgram } from "../materials/NodeMaterial";
 import type { SamplerShaderType } from "../materials/nodes/Builder";
 import { Side } from "../materials/Material";
@@ -18,7 +17,7 @@ import {
   cameraUniformValue, isIntegerSampler, objectUniformValue, lightsSignature,
   samplerDimension, samplerSampleType, wgslTypeName, toBufferView,
   rendererUniformValue, programSignature, geometryAttribute,
-  samplerState, type SamplerState, type TextureWrap,
+  samplerState, textureChannels, type SamplerState, type TextureWrap,
 } from "./common";
 
 interface PipelineEntry {
@@ -624,7 +623,7 @@ export class WebGPURenderer {
       const height = ArrayBuffer.isView(t.image) ? (t as DataTexture).height ?? 1 : 1;
       const depth = dimension === "3d" ? (t as DataTexture).depth ?? 1 : 1;
       const format = integer
-        ? t instanceof DataTexture && t.format === RedIntegerFormat
+        ? textureChannels(t) === 1
           ? samplerType.startsWith("isampler") ? "r8sint" : "r8uint"
           : integerGpuFormat(samplerType, ArrayBuffer.isView(t.image) ? t.image : null)
         : "rgba8unorm";

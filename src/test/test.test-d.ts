@@ -10,6 +10,7 @@
 
 import { describe, it, expectTypeOf } from "vitest";
 import { float, vec2, vec3, vec4, uniform, varying } from "../rmsl";
+import { DataTexture, RedIntegerFormat } from "../scene";
 import { evaluate, render, runner, type ShaderValue, type EvaluationResult } from "./index";
 
 describe("bound values", () => {
@@ -37,6 +38,29 @@ describe("bound values", () => {
     evaluate(() => map.texture(vec2(0, 0)), { uniforms: [[map, [1, 2, 3, 4]]] });
     evaluate(() => map.texture(vec2(0, 0)), {
       textures: [[map, { data: [1, 1, 1, 1], width: 1, height: 1 }]],
+    });
+  });
+
+  it("takes a scene texture as it stands, and its own data too", () => {
+    const map = uniform("usampler3D");
+    const volume = new DataTexture(new Uint8Array([1, 2]), 2, 1, 1, RedIntegerFormat);
+    evaluate(() => map.texture(vec3(0, 0, 0).toUVec3()), {
+      textures: [[map, volume]],
+    });
+    evaluate(() => map.texture(vec3(0, 0, 0).toUVec3()), {
+      textures: [[map, { data: [1, 2], width: 2, height: 1, channels: 1 }]],
+    });
+  });
+
+  it("rejects pixels nothing could read", () => {
+    const map = uniform("sampler2D");
+    evaluate(() => map.texture(vec2(0, 0)), {
+      // @ts-expect-error a path is not an image; nothing here would fetch it
+      textures: [[map, { image: "pixels.png", width: 2, height: 2 }]],
+    });
+    evaluate(() => map.texture(vec2(0, 0)), {
+      // @ts-expect-error a texture with no pixels at all is not texture data
+      textures: [[map, { width: 2, height: 2 }]],
     });
   });
 

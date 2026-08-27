@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { wgslUniformLayout } from "../rmsl";
 import {
   Scene, Mesh, InstancedMesh, BoxGeometry, MeshStandardMaterial,
-  MeshBasicMaterial, Texture,
+  MeshBasicMaterial, Texture, DataTexture, RedIntegerFormat, RGBAFormat,
   AmbientLight, DirectionalLight, PointLight,
   PerspectiveCamera, Vector3, Matrix4, Matrix3, Color,
   NearestFilter, LinearFilter, RepeatWrapping, MirroredRepeatWrapping,
@@ -12,7 +12,7 @@ import {
 import {
   cameraUniformValue, objectUniformValue, lightsSignature, wgslTypeName,
   isIntegerSampler, samplerSampleType, samplerDimension, samplerState,
-  uniformUploadValue, programSignature, geometryAttribute,
+  textureChannels, uniformUploadValue, programSignature, geometryAttribute,
 } from "./renderers/common";
 import { BufferAttribute } from "./geometries/BufferAttribute";
 
@@ -107,6 +107,16 @@ describe("samplerState", () => {
     const texture = new Texture();
     texture.wrapS = 99999;
     expect(samplerState(texture, "sampler2D").wrapS).toBe("clamp");
+  });
+});
+
+describe("textureChannels", () => {
+  it("reads a single-channel format as one channel and everything else as four", () => {
+    const data = new Uint8Array([1, 2, 3, 4]);
+    expect(textureChannels(new DataTexture(data, 2, 2, 1, RedIntegerFormat))).toBe(1);
+    expect(textureChannels(new DataTexture(data, 1, 1, 1, RGBAFormat))).toBe(4);
+    // A texture holding an image rather than a data view has no format at all.
+    expect(textureChannels(new Texture())).toBe(4);
   });
 });
 
