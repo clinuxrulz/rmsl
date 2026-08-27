@@ -1,10 +1,16 @@
 # Publishes a preview package for every commit on main and every pull request,
 # so a consumer can install a build that has not been released to npm:
 #
-#   npm i https://pkg.pr.new/@random-mesh/rmsl@<commit-sha>
+#   npm i https://pkg.pr.new/big-mesh-studios/rmsl/@random-mesh/rmsl@<commit-sha>
 #
 # The URL is posted as a comment on the pull request, and printed in this
-# workflow's log for pushes to main. Previews expire after a few weeks.
+# workflow's log for pushes to main. The shorter spelling `--compact` builds,
+# `pkg.pr.new/@random-mesh/rmsl@<commit-sha>`, needs the repository link in the
+# manifest npm has published, so it starts working from the next release on.
+#
+# A preview is removed once a month goes by with nobody downloading it, and
+# once it is six months old whatever happens — so a consumer pinned to one
+# wants a released version before then.
 name: Preview package
 
 on:
