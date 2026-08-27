@@ -15,6 +15,12 @@
     "typescript"
   ],
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/big-mesh-studios/rmsl.git"
+  },
+  "homepage": "https://github.com/big-mesh-studios/rmsl#readme",
+  "bugs": "https://github.com/big-mesh-studios/rmsl/issues",
   "files": [
     "dist"
   ],
