@@ -112,6 +112,12 @@ describe("JS backend: scalar arithmetic", () => {
     expect(evalScalar((a) => a.toInt().toBool().toFloat(), [0])).toBe(0);
   });
 
+  it("casts a vector to a scalar through its first component", () => {
+    expect(evalScalar((a, b) => vec3(a, b, b).toFloat(), [4.5, 9])).toBe(4.5);
+    expect(evalScalar((a, b) => vec3(a, b, b).toInt().toFloat(), [2.7, 9])).toBe(2);
+    expect(evalScalar((a, b) => vec2(a, b).toUint().toFloat(), [3.9, 9])).toBe(3);
+  });
+
   it("computes step, smoothstep, mix and clamp with operands in the right order", () => {
     expect(evalScalar((a, b) => b.step(a), [0.5, 2])).toBe(1);
     expect(evalScalar((a, b) => b.step(a), [2, 0.5])).toBe(0);
@@ -200,6 +206,22 @@ describe("JS backend: vector arithmetic", () => {
       name: "main", params: [{ name: "a", type: "vec3" }, { name: "b", type: "vec3" }],
     });
     expect(f({ params: { a: [1, 5, 3], b: [2, 2, 2] } })).toEqual([true, false, false]);
+  });
+
+  it("constructs a numeric vector from a boolean one as 1 and 0", () => {
+    // The components have to be numbers, not JavaScript booleans: arithmetic
+    // coerces either way, but a comparison does not, and `false !== 0`.
+    const mask = (a: Node<"float">) => vec3(a, a, a).lessThan(vec3(float(2))).toVec3();
+    expect(evalScalar((a) => mask(a).x, [3])).toBe(0);
+    expect(evalScalar((a) => mask(a).x, [1])).toBe(1);
+    expect(
+      evalScalar((a) => mask(a).x.notEqual(float(0)).select(float(1), float(0)), [3]),
+    ).toBe(0);
+  });
+
+  it("truncates the components a float vector puts in an integer one", () => {
+    expect(evalScalar((a, b) => vec3(a, b, b).toIVec3().x.toFloat(), [2.7, 9])).toBe(2);
+    expect(evalScalar((a, b) => vec3(a, b, b).toIVec3().x.toFloat(), [-2.7, 9])).toBe(-2);
   });
 
   it("computes all/any on boolean vectors", () => {

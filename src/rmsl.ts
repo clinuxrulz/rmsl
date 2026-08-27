@@ -3861,19 +3861,22 @@ function compileWGSLNode(
       let t = wgslType(node._t as string);
 
       // GLSL truncates with vec3(someVec4); WGSL has no narrowing constructor,
-      // so the components are selected explicitly.
+      // so the components are selected explicitly. All the way down to a
+      // scalar: `float(v)` reads `v.x` in GLSL, where WGSL takes only a scalar
+      // operand and so needs the component pulled out before converting it.
       let target = TYPE_WIDTH[node._t as string];
       let sourceType = (node.params?.[0] as any)?._t;
       let source = TYPE_WIDTH[sourceType];
       if (
         params.length === 1 && target !== undefined && source !== undefined
-        && source > target && target > 1
+        && source > target && target >= 1
         && /^(vec|ivec|uvec|bvec)/.test(sourceType ?? "")
       ) {
+        let narrowed = `${params[0].expr}.${"xyzw".slice(0, target)}`;
         return {
           decls: params[0].decls,
           body: params[0].body,
-          expr: `${params[0].expr}.${"xyzw".slice(0, target)}`,
+          expr: target === 1 ? `${t}(${narrowed})` : narrowed,
         };
       }
 
@@ -5488,6 +5491,36 @@ function isPlainJSIdentifier(s: string): boolean {
   return /^[_$a-zA-Z][_$a-zA-Z0-9]*$/.test(s);
 }
 
+/** The scalar kind a type's components hold, vector and scalar types alike. */
+function componentKind(type: string | undefined): "float" | "int" | "uint" | "bool" {
+  if (type === undefined) return "float";
+  if (type === "bool" || type.startsWith("bvec")) return "bool";
+  if (type === "int" || type.startsWith("ivec")) return "int";
+  if (type === "uint" || type.startsWith("uvec")) return "uint";
+  return "float";
+}
+
+/**
+ * One component converted between two types' scalar kinds, as a constructor
+ * converts it in both shading languages: a boolean reads as 1 or 0, a signed
+ * integer truncates toward zero, an unsigned one wraps, and every non-zero
+ * value is true.
+ *
+ * JavaScript numbers hold all four kinds, so without this a boolean stays a
+ * boolean — arithmetic on it still coerces, but a comparison does not, and
+ * `false !== 0` is true.
+ */
+function jsComponentCast(expr: string, sourceType: string | undefined, targetType: string): string {
+  let from = componentKind(sourceType);
+  let to = componentKind(targetType);
+  if (from === to) return expr;
+  if (from === "bool") expr = `(${expr} ? 1 : 0)`;
+  if (to === "bool") return `(${expr} !== 0)`;
+  if (to === "int") return `Math.trunc(${expr})`;
+  if (to === "uint") return `(${expr} >>> 0)`;
+  return expr;
+}
+
 /**
  * An operand safe to drop into a formula.
  *
@@ -5756,14 +5789,21 @@ function compileJSNode(
       let targetType = node._t as string;
       // Scalar conversions (float/int/uint/bool casts).
       if ((TYPE_WIDTH[targetType] ?? 0) === 1) {
-        let p = compileJSStage(node.params![0], ctx);
-        let expr = p.expr;
-        // A boolean becomes 1/0 first, matching float(bool)/int(bool) casts.
-        if (node.params![0]?._t === "bool") expr = `(${expr} ? 1 : 0)`;
-        if (targetType === "bool") expr = `(${expr} !== 0)`;
-        else if (targetType === "int") expr = `Math.trunc(${expr})`;
-        else if (targetType === "uint") expr = `(${expr} >>> 0)`;
-        return { decls: p.decls, body: p.body, expr };
+        let source = node.params?.[0] as BaseNode<ShaderType> | undefined;
+        // A scalar constructor given a vector reads its first component —
+        // `float(v)` is `v.x` — rather than refusing it.
+        if ((TYPE_WIDTH[source?._t as string] ?? 1) > 1) {
+          let c = jsCompileOperand(source, ctx);
+          return {
+            decls: c.decls, body: c.body,
+            expr: jsComponentCast(`${c.expr}[0]`, source?._t, targetType),
+          };
+        }
+        let p = compileJSStage(source, ctx);
+        return {
+          decls: p.decls, body: p.body,
+          expr: jsComponentCast(p.expr, source?._t, targetType),
+        };
       }
       let width = TYPE_WIDTH[targetType];
       if (width !== undefined) {
@@ -5773,22 +5813,23 @@ function compileJSNode(
         // operands instead fill components in order, zero-filling the rest.
         if (params.length === 1 && (TYPE_WIDTH[params[0]?._t] ?? 1) <= 1) {
           let c = jsCompileOperand(params[0], ctx);
+          let broadcast = jsComponentCast(c.expr, params[0]?._t, targetType);
           if (ctx.outTarget) {
-            let writes = Array.from({ length: width }, (_, i) => `${ctx.outTarget}[${i}] = ${c.expr};`);
+            let writes = Array.from({ length: width }, (_, i) => `${ctx.outTarget}[${i}] = ${broadcast};`);
             return { decls: c.decls, body: [...c.body, ...writes], expr: ctx.outTarget };
           }
-          return { decls: c.decls, body: c.body, expr: `[${Array(width).fill(c.expr).join(", ")}]` };
+          return { decls: c.decls, body: c.body, expr: `[${Array(width).fill(broadcast).join(", ")}]` };
         }
         // Vector construct: expand every operand's components into one array.
-        let compiled = params.map((p: BaseNode<ShaderType>) => ({ c: jsCompileOperand(p, ctx), w: TYPE_WIDTH[p?._t] ?? 1 }));
+        let compiled = params.map((p: BaseNode<ShaderType>) => ({ c: jsCompileOperand(p, ctx), w: TYPE_WIDTH[p?._t] ?? 1, t: p?._t as string | undefined }));
         let pieces: string[] = [];
         let decls: string[] = [];
         let body: string[] = [];
-        for (let { c, w } of compiled) {
+        for (let { c, w, t } of compiled) {
           decls.push(...c.decls);
           body.push(...c.body);
-          if (w <= 1) pieces.push(c.expr);
-          else for (let i = 0; i < w; i++) pieces.push(`${c.expr}[${i}]`);
+          if (w <= 1) pieces.push(jsComponentCast(c.expr, t, targetType));
+          else for (let i = 0; i < w; i++) pieces.push(jsComponentCast(`${c.expr}[${i}]`, t, targetType));
         }
         while (pieces.length < width) pieces.push("0");
         pieces = pieces.slice(0, width);
