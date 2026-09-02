@@ -37,5 +37,6 @@ export * from "./textures/Texture";
 export * from "./textures/DataTexture";
 export * from "./textures/constants";
 export * from "./renderers/WebGLRenderer";
+export * from "./renderers/WebGLRenderTarget";
 export * from "./renderers/WebGPURenderer";
 export * from "./renderers/common";

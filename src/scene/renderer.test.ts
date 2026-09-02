@@ -328,6 +328,100 @@ globalThis.__rmslSamplerStateRun = () => {
 };
 `;
 
+/**
+ * A draw redirects into an offscreen render target, whose pixels are read back
+ * without ever touching the canvas's drawing buffer; the next un-targeted
+ * render is back on the canvas.
+ */
+const ENTRY_TARGET = `
+import { WebGLRenderer, Scene, Mesh, PerspectiveCamera, PlaneGeometry,
+  MeshBasicMaterial, WebGLRenderTarget } from "./index";
+globalThis.__rmslTargetRun = () => {
+  const canvas = document.createElement("canvas");
+  canvas.width = 32;
+  canvas.height = 32;
+  const renderer = new WebGLRenderer(canvas, { antialias: false });
+  renderer.setClearColor(0x000000);
+  const scene = new Scene();
+  scene.add(new Mesh(new PlaneGeometry(2, 2),
+    new MeshBasicMaterial({ color: 0xff0000 })));
+  const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+  camera.position.set(0, 0, 1);
+  camera.lookAt(0, 0, 0);
+
+  const target = new WebGLRenderTarget(8, 8);
+  renderer.render(scene, camera, target);
+  const offscreen = renderer.readPixels(target);
+  const gl = renderer.gl;
+  const canvasPixels = new Uint8Array(4);
+  gl.readPixels(16, 16, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, canvasPixels);
+
+  renderer.render(scene, camera);
+  gl.readPixels(16, 16, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, canvasPixels);
+
+  const center = (4 + 4 * 8) * 4;
+  return {
+    targetR: offscreen[center],
+    canvasR: canvasPixels[0],
+    error: gl.getError(),
+  };
+};
+`;
+
+/**
+ * Two meshes share one uploaded geometry and draw adjacent slices of it via
+ * their draw ranges: left half red, right half blue. A draw-range not honored
+ * draws the whole geometry for each — the blue (drawn last) covers the red
+ * half, and the left pixel reads blue instead of red.
+ */
+const ENTRY_RANGE = `
+import { WebGLRenderer, Scene, Mesh, PerspectiveCamera, BufferGeometry,
+  BufferAttribute, MeshBasicMaterial, Side } from "./index";
+globalThis.__rmslRangeRun = () => {
+  const canvas = document.createElement("canvas");
+  canvas.width = 32;
+  canvas.height = 32;
+  const renderer = new WebGLRenderer(canvas, { antialias: false });
+  renderer.setClearColor(0x000000);
+  const scene = new Scene();
+
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new BufferAttribute(new Float32Array([
+    -1, -1, 0,  -1, 1, 0,  0, 1, 0,  0, -1, 0,
+    0, -1, 0,  0, 1, 0,  1, 1, 0,  1, -1, 0,
+  ]), 3));
+  geometry.setAttribute("normal", new BufferAttribute(new Float32Array([
+    0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+    0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+  ]), 3));
+  geometry.setAttribute("uv", new BufferAttribute(new Float32Array([
+    0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0,
+  ]), 2));
+  geometry.setIndex(new BufferAttribute(new Uint16Array([
+    0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7,
+  ]), 1));
+
+  const left = new Mesh(geometry, new MeshBasicMaterial({ color: 0xff0000, side: Side.DoubleSide }));
+  left.drawRange = { start: 0, count: 6 };
+  const right = new Mesh(geometry, new MeshBasicMaterial({ color: 0x0000ff, side: Side.DoubleSide }));
+  right.drawRange = { start: 6, count: 6 };
+  scene.add(left, right);
+
+  const camera = new PerspectiveCamera(50, 1, 0.1, 100);
+  camera.position.set(0, 0, 2);
+  camera.lookAt(0, 0, 0);
+  renderer.render(scene, camera);
+
+  const pixels = new Uint8Array(4);
+  const gl = renderer.gl;
+  gl.readPixels(8, 16, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  const leftPix = { r: pixels[0], b: pixels[2] };
+  gl.readPixels(24, 16, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  const rightPix = { r: pixels[0], b: pixels[2] };
+  return { leftPix, rightPix, error: gl.getError() };
+};
+`;
+
 async function bundleEntry(source: string): Promise<string> {
   const result = await build({
     stdin: {
@@ -510,6 +604,42 @@ describe.skipIf(!GPU_ENABLED)("WebGLRenderer", () => {
     expect(pixel.r).toBeGreaterThan(150);
     expect(pixel.g).toBeLessThan(60);
     expect(pixel.b).toBeLessThan(60);
+  }, 60_000);
+
+  it("renders into a render target and reads its pixels back", async () => {
+    const page = await gpuPage();
+    const code = await bundleEntry(ENTRY_TARGET);
+    const pixel = await page.evaluate(async (source: string) => {
+      // eslint-disable-next-line no-new-func
+      const fn = new Function(source);
+      fn();
+      return (globalThis as any).__rmslTargetRun();
+    }, code);
+
+    // The draw went to the offscreen target, not the canvas, and read back red;
+    // the following un-targeted render puts it on the canvas again.
+    expect(pixel.error).toBe(0);
+    expect(pixel.targetR).toBeGreaterThan(150);
+    expect(pixel.canvasR).toBeGreaterThan(150);
+  }, 60_000);
+
+  it("draws only the slice a mesh's drawRange selects from a shared geometry", async () => {
+    const page = await gpuPage();
+    const code = await bundleEntry(ENTRY_RANGE);
+    const result = await page.evaluate(async (source: string) => {
+      // eslint-disable-next-line no-new-func
+      const fn = new Function(source);
+      fn();
+      return (globalThis as any).__rmslRangeRun();
+    }, code);
+
+    // Left red, right blue: the blue mesh drawn afterwards stays off the red
+    // half only because its range starts after the left quad's indices.
+    expect(result.error).toBe(0);
+    expect(result.leftPix.r).toBeGreaterThan(150);
+    expect(result.leftPix.b).toBeLessThan(60);
+    expect(result.rightPix.b).toBeGreaterThan(150);
+    expect(result.rightPix.r).toBeLessThan(60);
   }, 60_000);
 });
 

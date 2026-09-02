@@ -1,6 +1,7 @@
 import { compileGLSL, type GLSLPrecision } from "../../rmsl";
 import { Color } from "../math/Color";
 import { Vector4 } from "../math/Vector4";
+import { WebGLRenderTarget } from "./WebGLRenderTarget";
 import type { Scene } from "../scenes/Scene";
 import type { Camera } from "../cameras/Camera";
 import type { Mesh } from "../objects/Mesh";
@@ -49,6 +50,11 @@ export class WebGLRenderer {
    */
   private attributeBuffers = new Map<BufferAttribute, WebGLBuffer>();
   private textures = new Map<Texture, WebGLTexture>();
+  /** The framebuffer, color texture, and depth renderbuffer behind each render target, at its bound size. */
+  private renderTargets = new Map<
+    WebGLRenderTarget,
+    { framebuffer: WebGLFramebuffer; color: WebGLTexture; depth: WebGLRenderbuffer; width: number; height: number }
+  >();
   private clearColor = new Color(0, 0, 0);
   private clearAlpha = 1;
   private animationCallback: ((time: number) => void) | null = null;
@@ -101,14 +107,27 @@ export class WebGLRenderer {
     }
   }
 
-  render(scene: Scene, camera: Camera): void {
+  /**
+   * Draws `scene` from `camera`'s view. A `target` redirects the draw to an
+   * offscreen framebuffer sized after the target; without one the draw lands
+   * on the canvas at its full size. The target keeps its own hidden color and
+   * depth, so this is how a pass the player never sees is produced without
+   * touching the canvas's drawing buffer.
+   */
+  render(scene: Scene, camera: Camera, target: WebGLRenderTarget | null = null): void {
     const gl = this.gl;
 
     scene.updateMatrixWorld(true);
     camera.updateMatrixWorld(true);
     camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
 
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    if (target !== null) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargetFramebuffer(target, gl));
+      gl.viewport(0, 0, target.width, target.height);
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    }
     const [r, g, b] = this.clearColor.toArray();
     gl.clearColor(r, g, b, this.clearAlpha);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -131,6 +150,57 @@ export class WebGLRenderer {
     return target;
   }
 
+  /**
+   * The framebuffer behind a render target, created (or recreated at the
+   * target's current size) on this renderer's context the first time it is
+   * drawn into — so a target costs nothing until a pass binds it, and the app
+   * resizes it by reassigning `width`/`height` before the next render.
+   */
+  renderTargetFramebuffer(target: WebGLRenderTarget, gl = this.gl): WebGLFramebuffer {
+    const existing = this.renderTargets.get(target);
+    if (existing !== undefined && existing.width === target.width && existing.height === target.height) {
+      return existing.framebuffer;
+    }
+    if (existing !== undefined) {
+      this.deleteRenderTarget(target, existing, gl);
+    }
+    const framebuffer = gl.createFramebuffer()!;
+    const color = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, color);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, target.width, target.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    const depth = gl.createRenderbuffer()!;
+    gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, target.width, target.height);
+    gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const entry = { framebuffer, color, depth, width: target.width, height: target.height };
+    this.renderTargets.set(target, entry);
+    return framebuffer;
+  }
+
+  /**
+   * Copies a render target's color buffer into a `Uint8Array` and returns it.
+   * The call reads the GPU back to the host and so stalls the pipeline; it is
+   * for the occasional sample (a colour-coded occlusion pass every few hundred
+   * frames), not the steady state of a frame.
+   */
+  readPixels(target: WebGLRenderTarget, out?: Uint8Array): Uint8Array {
+    const gl = this.gl;
+    const buffer = out ?? new Uint8Array(target.width * target.height * 4);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.renderTargetFramebuffer(target));
+    gl.readPixels(0, 0, target.width, target.height, gl.RGBA, gl.UNSIGNED_BYTE, buffer);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+    return buffer;
+  }
+
   private drawMesh(mesh: Mesh, scene: Scene, camera: Camera): void {
     const material = mesh.material;
     if (!(material as NodeMaterial).isNodeMaterial) return;
@@ -147,12 +217,25 @@ export class WebGLRenderer {
 
     const geometry = mesh.geometry;
     const instanceCount = instancing ? (mesh as InstancedMesh).count : geometry.instanceCount;
+    // A mesh can draw a slice of its geometry (an object sharing one merged
+    // buffer with several others); omit the mesh's `drawRange` to draw it all.
+    const range = mesh.drawRange;
     if (geometry.index) {
       const indexView = toBufferView(geometry.index.array, true) as Uint16Array | Uint32Array;
       const type = indexView instanceof Uint16Array ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT;
-      gl.drawElementsInstanced(gl.TRIANGLES, indexView.length, type, 0, instanceCount);
+      const count = Number.isFinite(range.count) ? range.count : indexView.length;
+      gl.drawElementsInstanced(
+        gl.TRIANGLES,
+        count,
+        type,
+        range.start * indexView.BYTES_PER_ELEMENT,
+        instanceCount,
+      );
     } else {
-      gl.drawArraysInstanced(gl.TRIANGLES, 0, geometry.attributes.position?.count ?? 0, instanceCount);
+      const count = Number.isFinite(range.count)
+        ? range.count
+        : geometry.attributes.position?.count ?? 0;
+      gl.drawArraysInstanced(gl.TRIANGLES, range.start, count, instanceCount);
     }
   }
 
@@ -454,6 +537,17 @@ export class WebGLRenderer {
     buffers.needsUpload = false;
   }
 
+  private deleteRenderTarget(
+    target: WebGLRenderTarget,
+    entry: { framebuffer: WebGLFramebuffer; color: WebGLTexture; depth: WebGLRenderbuffer },
+    gl = this.gl,
+  ): void {
+    gl.deleteFramebuffer(entry.framebuffer);
+    gl.deleteTexture(entry.color);
+    gl.deleteRenderbuffer(entry.depth);
+    this.renderTargets.delete(target);
+  }
+
   dispose(): void {
     const gl = this.gl;
     for (const bySignature of this.programs.values()) {
@@ -468,6 +562,7 @@ export class WebGLRenderer {
       gl.deleteTexture(glTexture);
       texture.removeEventListener("dispose", this.onTextureDispose);
     }
+    for (const [target, entry] of this.renderTargets) this.deleteRenderTarget(target, entry);
     this.programs.clear();
     this.geometryBuffers.clear();
     this.attributeBuffers.clear();

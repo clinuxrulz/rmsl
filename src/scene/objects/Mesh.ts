@@ -12,6 +12,14 @@ export class Mesh extends Object3D {
   material: Material;
   castShadow = false;
   receiveShadow = false;
+  /**
+   * The slice of `geometry` this mesh draws: `start` in vertices, or in
+   * indices for an indexed geometry, with `count` of them. Defaults to the
+   * whole geometry. Several meshes sharing one uploaded geometry (a merged
+   * buffer) each point their range at their own run of triangles, so one GPU
+   * buffer feeds many per-slice draw calls.
+   */
+  drawRange: { start: number; count: number } = { start: 0, count: Infinity };
 
   constructor(geometry: BufferGeometry = new BufferGeometry(), material: Material = new Material()) {
     super();
